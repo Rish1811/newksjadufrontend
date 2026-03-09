@@ -229,7 +229,7 @@ const MyOrders = () => {
                             <div key={item._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderBottom: '1px solid #eee' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                                     <div style={{ width: '60px', height: '60px', backgroundColor: '#f9f9f9', borderRadius: '8px', padding: '5px' }}>
-                                        <img src={`${API_BASE}${item.image}`} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                        <img src={item.image && item.image.startsWith('http') ? item.image : `${API_BASE}${item.image}`} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                                     </div>
                                     <div>
                                         <h4 style={{ margin: '0 0 5px 0' }}>{item.name}</h4>

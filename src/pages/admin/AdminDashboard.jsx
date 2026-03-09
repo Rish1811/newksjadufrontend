@@ -33,6 +33,11 @@ const AdminDashboard = () => {
         }, 3000);
     };
 
+    const getImageUrl = (path) => {
+        if (!path) return '';
+        return path.startsWith('http') ? path : `${API_BASE}${path}`;
+    };
+
     const fetchUsers = async () => {
         try {
             const response = await fetch(`${API_BASE}/api/users`, {
@@ -385,7 +390,7 @@ const AdminDashboard = () => {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
                             {products.map(product => (
                                 <div key={product._id} style={{ background: 'white', padding: '1rem', borderRadius: '10px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
-                                    <img src={`http://localhost:5000${product.image}`} alt={product.name} style={{ width: '100%', height: '150px', objectFit: 'contain' }} />
+                                    <img src={getImageUrl(product.image)} alt={product.name} style={{ width: '100%', height: '150px', objectFit: 'contain' }} />
                                     <h4>{product.name}</h4>
                                     <p>₹{product.price}</p>
                                     <button onClick={() => handleDeleteProduct(product._id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>Delete</button>
@@ -492,7 +497,7 @@ const AdminDashboard = () => {
                                                 <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: index < viewOrder.orderItems.length - 1 ? '1px solid #f9f9f9' : 'none' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                         <div style={{ width: '40px', height: '40px', backgroundColor: '#f9f9f9', borderRadius: '5px', padding: '2px' }}>
-                                                            <img src={`http://localhost:5000${item.image}`} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                                            <img src={getImageUrl(item.image)} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                                                         </div>
                                                         <div>
                                                             <p style={{ margin: 0, fontWeight: 'bold', fontSize: '0.95rem' }}>{item.name}</p>
@@ -567,7 +572,7 @@ const AdminDashboard = () => {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
                             {banners.map(banner => (
                                 <div key={banner._id} style={{ background: 'white', padding: '1rem', borderRadius: '10px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', position: 'relative' }}>
-                                    <img src={`${API_BASE}${banner.image}`} alt="Banner" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '5px' }} />
+                                    <img src={getImageUrl(banner.image)} alt="Banner" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '5px' }} />
                                     <button
                                         onClick={() => handleDeleteBanner(banner._id)}
                                         style={{

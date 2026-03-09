@@ -4,8 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import API_BASE from '../config';
 
 const ProductCard = ({ _id, name, price, image, rating, category, onAddToCart, onBuyNow }) => {
-    // Construct valid image URL
-    const imageUrl = image ? `${API_BASE}${image}` : '/images/sample.jpg';
+    const getImageUrl = (path) => {
+        if (!path) return '/images/sample.jpg';
+        return path.startsWith('http') ? path : `${API_BASE}${path}`;
+    };
+
+    const imageUrl = getImageUrl(image);
     const [imageLoaded, setImageLoaded] = useState(false);
     const [qty, setQty] = useState(1);
     const [isAnimating, setIsAnimating] = useState(false);

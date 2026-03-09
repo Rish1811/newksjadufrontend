@@ -5,6 +5,11 @@ const BannerSlider = () => {
     const [banners, setBanners] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
 
+    const getImageUrl = (path) => {
+        if (!path) return '';
+        return path.startsWith('http') ? path : `${API_BASE}${path}`;
+    };
+
     useEffect(() => {
         const fetchBanners = async () => {
             try {
@@ -24,19 +29,19 @@ const BannerSlider = () => {
 
         const interval = setInterval(() => {
             setCurrentIndex((prevIndex) => (prevIndex + 1) % banners.length);
-        }, 2000); // 2 second interval
+        }, 3000); // 3 second interval
 
         return () => clearInterval(interval);
     }, [banners]);
 
     if (!banners || banners.length === 0) {
-        return null; // Or a default static banner
+        return null;
     }
 
     return (
         <div style={{
             width: '100%',
-            height: '400px', // Adjust height as needed
+            height: '400px',
             position: 'relative',
             overflow: 'hidden',
             backgroundColor: '#f0f0f0'
@@ -53,7 +58,7 @@ const BannerSlider = () => {
                         style={{
                             minWidth: '100%',
                             height: '100%',
-                            backgroundImage: `url(${API_BASE}${banner.image})`,
+                            backgroundImage: `url(${getImageUrl(banner.image)})`,
                             backgroundSize: 'cover',
                             backgroundPosition: 'center',
                             display: 'flex',
@@ -61,7 +66,6 @@ const BannerSlider = () => {
                             justifyContent: 'center'
                         }}
                     >
-                        {/* Optional Title Overlay */}
                         {banner.title && (
                             <div style={{
                                 backgroundColor: 'rgba(0,0,0,0.5)',
@@ -79,7 +83,6 @@ const BannerSlider = () => {
                 ))}
             </div>
 
-            {/* Navigation Dots */}
             <div style={{
                 position: 'absolute',
                 bottom: '20px',

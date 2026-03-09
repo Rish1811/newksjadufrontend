@@ -16,6 +16,11 @@ const ProductDetails = () => {
     const [isAnimating, setIsAnimating] = useState(false);
     const [showToast, setShowToast] = useState(false);
 
+    const getImageUrl = (path) => {
+        if (!path) return '';
+        return path.startsWith('http') ? path : `${API_BASE}${path}`;
+    };
+
     useEffect(() => {
         const fetchProduct = async () => {
             setLoading(true);
@@ -139,7 +144,7 @@ const ProductDetails = () => {
                 {/* Left Side: Images */}
                 <div style={{ position: 'relative' }}>
                     <div style={{ backgroundColor: '#EDF5FD', borderRadius: '15px', padding: '2rem', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '500px', position: 'relative', overflow: 'hidden' }}>
-                        <img src={`${API_BASE}${mainImage}`} alt={product.name} style={{ width: '80%', height: 'auto', objectFit: 'contain', zIndex: 2 }} />
+                        <img src={getImageUrl(mainImage)} alt={product.name} style={{ width: '80%', height: 'auto', objectFit: 'contain', zIndex: 2 }} />
                         <div style={{ position: 'absolute', top: '20px', left: '20px', width: '120px', height: '120px', backgroundColor: '#FCD74A', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', textAlign: 'center', fontWeight: 'bold', color: '#333', zIndex: 3, boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
                             <span style={{ fontSize: '1.2rem', lineHeight: '1.2' }}>bought by<br /><span style={{ fontSize: '1.8rem', fontWeight: '900' }}>2.1k+</span><br />families</span>
                         </div>
@@ -151,7 +156,7 @@ const ProductDetails = () => {
                                 width: '80px', height: '80px', flexShrink: 0, borderRadius: '8px', border: mainImage === img ? '2px solid rgb(0, 0, 128)' : '1px solid #ddd',
                                 overflow: 'hidden', cursor: 'pointer', backgroundColor: '#f9f9f9', padding: '5px'
                             }}>
-                                <img src={`${API_BASE}${img}`} alt={`Thumbnail ${idx}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                <img src={getImageUrl(img)} alt={`Thumbnail ${idx}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                             </div>
                         ))}
                     </div>
@@ -354,7 +359,7 @@ const ProductDetails = () => {
                                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                                         {review.images.map((img, i) => (
                                             <div key={i} style={{ width: '80px', height: '80px', borderRadius: '8px', overflow: 'hidden' }}>
-                                                <img src={`${API_BASE}${img}`} alt="Review photo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                <img src={getImageUrl(img)} alt="Review photo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                             </div>
                                         ))}
                                     </div>
