@@ -1,2 +1,3 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://ksjadu-backend.netlify.app';
+const API_BASE = 'https://newksjadubackend.netlify.app';
 export default API_BASE;
+ 

@@ -2,8 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API_BASE from '../config';
 import Hero from '../components/Hero';
+import CategoryCircles from '../components/CategoryCircles';
 import ProductGrid from '../components/ProductGrid';
 import BannerSlider from '../components/BannerSlider';
+import VideoReels from '../components/VideoReels';
+import ConcernsSection from '../components/ConcernsSection';
+import TrustedByFamilies from '../components/TrustedByFamilies';
+import ProductRow from '../components/ProductRow';
 
 const Home = () => {
     const [recentReviews, setRecentReviews] = useState([]);
@@ -25,51 +30,20 @@ const Home = () => {
     }, []);
 
     return (
-        <div style={{ backgroundColor: '#fdfdfd' }}>
+        <div style={{ backgroundColor: 'var(--color-white)', transition: 'var(--bg-transition)' }}>
             <Hero />
+            <CategoryCircles />
             <BannerSlider />
-            <ProductGrid />
+            
+            <ProductRow title="Mom's Favorites" section="moms_favorite" badgeText="Most Loved" />
+            <ProductRow title="New Launched by K'sjadu" section="new_launch" badgeText="New" />
+            <ProductRow title="Mega Saver Packs" section="mega_saver" badgeText="5 Litres" />
 
-            {recentReviews.length > 0 && (
-                <div style={{ padding: '4rem 1rem', maxWidth: '1200px', margin: '0 auto', backgroundColor: '#fff', borderRadius: '15px', marginBottom: '4rem' }}>
-                    <h2 style={{ color: 'rgb(0, 0, 128)', textAlign: 'center', marginBottom: '3rem', fontSize: '2.5rem' }}>See What Families Say</h2>
-
-                    <div style={{ display: 'flex', gap: '2rem', overflowX: 'auto', paddingBottom: '1rem', WebkitOverflowScrolling: 'touch' }}>
-                        {recentReviews.map((review, idx) => (
-                            <div key={idx} style={{
-                                minWidth: '320px',
-                                padding: '2rem',
-                                border: '1px solid #eee',
-                                borderRadius: '15px',
-                                backgroundColor: '#fafafa',
-                                flexShrink: 0,
-                                boxShadow: '0 4px 15px rgba(0,0,0,0.03)'
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
-                                    <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{review.user}</span>
-                                    <span style={{ color: '#FFB800', fontSize: '1.2rem' }}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</span>
-                                </div>
-                                <div style={{ fontSize: '0.85rem', color: '#888', marginBottom: '1.5rem', fontWeight: 'bold' }}>
-                                    Reviewed <span onClick={() => navigate(`/product/${review.productId}`)} style={{ color: 'rgb(0, 0, 128)', cursor: 'pointer', textDecoration: 'underline' }}>{review.productName}</span>
-                                </div>
-                                <p style={{ color: '#444', lineHeight: '1.6', fontSize: '0.95rem', minHeight: '60px' }}>
-                                    "{review.comment}"
-                                </p>
-
-                                {review.images && review.images.length > 0 && (
-                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '1rem' }}>
-                                        {review.images.map((img, i) => (
-                                            <div key={i} style={{ width: '60px', height: '60px', borderRadius: '8px', overflow: 'hidden', border: '1px solid #ddd' }}>
-                                                <img src={`${API_BASE}${img}`} alt="Review" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+            <VideoReels />
+            <ConcernsSection />
+            <ProductRow title="Super Saver Refills" section="super_saver_refills" badgeText="2 Litres" />
+            <ProductRow title="Best Sellers" section="" />
+            <TrustedByFamilies />
         </div>
     );
 };

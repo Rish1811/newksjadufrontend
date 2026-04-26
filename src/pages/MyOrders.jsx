@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API_BASE from '../config';
+import { loadRazorpayScript } from '../utils/razorpay';
 
 const MyOrders = () => {
     const [orders, setOrders] = useState([]);
@@ -12,8 +13,9 @@ const MyOrders = () => {
     const [selectedQty, setSelectedQty] = useState(1);
     const [shippingAddress, setShippingAddress] = useState({ address: '', city: '', postalCode: '', phone: '' });
     const [orderStatus, setOrderStatus] = useState(null);
+    const [paymentConfig, setPaymentConfig] = useState(null);
     const [reviewModal, setReviewModal] = useState({ open: false, product: null });
-    const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '', images: null });
+    const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '', title: '', images: null });
     const navigate = useNavigate();
     const user = JSON.parse(localStorage.getItem('user'));
 
@@ -52,8 +54,16 @@ const MyOrders = () => {
             }
         };
 
+        const fetchConfig = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/payment_settings/config`);
+                if (res.ok) setPaymentConfig(await res.json());
+            } catch (err) { console.error('Config fetch error:', err); }
+        };
+
         fetchOrders();
         fetchCart();
+        fetchConfig();
 
         window.addEventListener('cartUpdated', fetchCart);
         return () => window.removeEventListener('cartUpdated', fetchCart);
@@ -91,8 +101,8 @@ const MyOrders = () => {
         }
     };
 
-    const handlePlaceOrder = async (e) => {
-        e.preventDefault();
+    const handlePlaceOrder = async (e, method = 'cod') => {
+        if (e) e.preventDefault();
 
         let orderItems = [];
         let totalPrice = 0;
@@ -120,7 +130,8 @@ const MyOrders = () => {
         const orderData = {
             orderItems,
             shippingAddress,
-            totalPrice
+            totalPrice,
+            paymentMethod: method // track if online or cod
         };
 
         try {
@@ -134,23 +145,55 @@ const MyOrders = () => {
             });
 
             if (res.ok) {
-                setOrderStatus('success');
-                if (isCartCheckout) {
-                    // Clear cart in backend
-                    await fetch(`${API_BASE}/api/cart`, {
-                        method: 'DELETE',
-                        headers: { Authorization: `Bearer ${user.token}` }
+                const createdOrder = await res.json();
+
+                if (method === 'online' && paymentConfig?.isEnabled) {
+                    const scriptLoaded = await loadRazorpayScript();
+                    if (!scriptLoaded) {
+                        alert('Razorpay SDK failed to load. Are you online?');
+                        return;
+                    }
+
+                    const rpRes = await fetch(`${API_BASE}/api/razorpay/create-order`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ amount: orderData.totalPrice, receipt: createdOrder._id })
                     });
-                    setCartItems([]);
-                    window.dispatchEvent(new Event('cartUpdated'));
+
+                    if (!rpRes.ok) throw new Error('Razorpay order creation failed');
+                    const rpOrder = await rpRes.json();
+
+                    const options = {
+                        key: paymentConfig.keyId,
+                        amount: rpOrder.amount,
+                        currency: rpOrder.currency,
+                        name: "K'S JADU",
+                        description: "Order #" + createdOrder._id.slice(-6),
+                        image: "/logo.png",
+                        order_id: rpOrder.id,
+                        handler: async (response) => {
+                            const verifyRes = await fetch(`${API_BASE}/api/razorpay/verify`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ ...response, database_order_id: createdOrder._id })
+                            });
+                            if (verifyRes.ok) {
+                                setOrderStatus('success');
+                                finalizeOrder();
+                            } else {
+                                setOrderStatus('error');
+                            }
+                        },
+                        prefill: { name: user.name, email: user.email, contact: shippingAddress.phone },
+                        theme: { color: "rgb(0, 0, 128)" }
+                    };
+
+                    const rzp = new window.Razorpay(options);
+                    rzp.open();
+                } else {
+                    setOrderStatus('success');
+                    finalizeOrder();
                 }
-                setTimeout(() => {
-                    setShowCheckout(false);
-                    setOrderStatus(null);
-                    setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
-                    // Refresh orders list instead of full reload if possible, but reload is safer for state
-                    window.location.reload();
-                }, 3000);
             } else {
                 setOrderStatus('error');
             }
@@ -160,9 +203,26 @@ const MyOrders = () => {
         }
     };
 
+    const finalizeOrder = async () => {
+        if (isCartCheckout) {
+            await fetch(`${API_BASE}/api/cart`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${user.token}` }
+            });
+            setCartItems([]);
+            window.dispatchEvent(new Event('cartUpdated'));
+        }
+        setTimeout(() => {
+            setShowCheckout(false);
+            setOrderStatus(null);
+            setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
+            window.location.reload();
+        }, 3000);
+    };
+
     const handleOpenReview = (item) => {
         setReviewModal({ open: true, product: item });
-        setReviewForm({ rating: 5, comment: '', images: null });
+        setReviewForm({ rating: 5, comment: '', title: '', images: null });
     };
 
     const handleSubmitReview = async (e) => {
@@ -182,6 +242,7 @@ const MyOrders = () => {
         const formData = new FormData();
         formData.append('rating', reviewForm.rating);
         formData.append('comment', reviewForm.comment);
+        formData.append('title', reviewForm.title);
         if (reviewForm.images) {
             for (let i = 0; i < reviewForm.images.length; i++) {
                 formData.append('images', reviewForm.images[i]);
@@ -374,18 +435,23 @@ const MyOrders = () => {
                                     <span>Total Amount:</span>
                                     <span>₹{isCartCheckout
                                         ? cartItems.reduce((acc, item) => acc + (item.price * item.qty), 0)
-                                        : selectedProduct?.price * selectedQty} (COD)</span>
+                                        : selectedProduct?.price * selectedQty}</span>
                                 </div>
 
-                                <form onSubmit={handlePlaceOrder} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                                <form onSubmit={(e) => handlePlaceOrder(e, 'cod')} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
                                     <input type="text" placeholder="Street Address" required value={shippingAddress.address} onChange={(e) => setShippingAddress({ ...shippingAddress, address: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
                                     <input type="text" placeholder="City" required value={shippingAddress.city} onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
                                     <input type="text" placeholder="PIN Code" required value={shippingAddress.postalCode} onChange={(e) => setShippingAddress({ ...shippingAddress, postalCode: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
                                     <input type="text" placeholder="Phone Number" required value={shippingAddress.phone} onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
 
-                                    <div style={{ display: 'flex', gap: '10px', marginTop: '1rem' }}>
-                                        <button type="submit" style={{ flex: 1, padding: '14px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Confirm COD Order</button>
-                                        <button type="button" onClick={() => setShowCheckout(false)} style={{ flex: 1, padding: '14px', backgroundColor: '#f0f0f0', color: '#333', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '1rem' }}>
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <button type="submit" style={{ flex: 1, padding: '14px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Confirm COD Order</button>
+                                            {paymentConfig?.isEnabled && (
+                                                <button type="button" onClick={(e) => handlePlaceOrder(null, 'online')} style={{ flex: 1, padding: '14px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Pay Online</button>
+                                            )}
+                                        </div>
+                                        <button type="button" onClick={() => setShowCheckout(false)} style={{ width: '100%', padding: '12px', backgroundColor: '#f0f0f0', color: '#333', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
                                     </div>
                                 </form>
                             </>
@@ -396,27 +462,65 @@ const MyOrders = () => {
 
             {/* Review Modal */}
             {reviewModal.open && (
-                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000 }}>
-                    <div style={{ backgroundColor: 'white', padding: '2rem', borderRadius: '15px', width: '90%', maxWidth: '500px', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-                        <h2 style={{ marginBottom: '1rem', color: 'rgb(0, 0, 128)' }}>Review {reviewModal.product.name}</h2>
-                        <form onSubmit={handleSubmitReview} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Rating (Out of 5)</label>
-                                <select value={reviewForm.rating} onChange={e => setReviewForm({ ...reviewForm, rating: e.target.value })} style={{ width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }}>
-                                    {[5, 4, 3, 2, 1].map(num => <option key={num} value={num}>{num} Stars</option>)}
-                                </select>
+                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 3000, backdropFilter: 'blur(10px)' }}>
+                    <div style={{ backgroundColor: '#fff', padding: '2.5rem', borderRadius: '32px', width: '90%', maxWidth: '500px', boxShadow: '0 20px 50px rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                            <h2 style={{ fontSize: '1.8rem', fontWeight: '800', color: '#111827', margin: '0 0 10px 0' }}>Share Your Experience</h2>
+                            <p style={{ color: '#6b7280', margin: 0 }}>Reviewing {reviewModal.product.name}</p>
+                        </div>
+                        
+                        <form onSubmit={handleSubmitReview} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                    <button
+                                        key={star}
+                                        type="button"
+                                        onClick={() => setReviewForm({ ...reviewForm, rating: star })}
+                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '2.5rem', color: star <= reviewForm.rating ? '#fbbf24' : '#e5e7eb' }}
+                                    >
+                                        ★
+                                    </button>
+                                ))}
                             </div>
+
                             <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Review Feedback</label>
-                                <textarea required rows="4" value={reviewForm.comment} onChange={e => setReviewForm({ ...reviewForm, comment: e.target.value })} placeholder="Tell us what you think..." style={{ width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ddd', resize: 'vertical' }} />
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Review Title</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="e.g. Best Cleaner Ever!" 
+                                    required 
+                                    value={reviewForm.title} 
+                                    onChange={e => setReviewForm({ ...reviewForm, title: e.target.value })} 
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e5e7eb', outline: 'none', fontSize: '1rem' }} 
+                                />
                             </div>
+
                             <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Attach Photos (Optional)</label>
-                                <input type="file" multiple accept="image/*" onChange={e => setReviewForm({ ...reviewForm, images: e.target.files })} />
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Your Thoughts</label>
+                                <textarea 
+                                    required 
+                                    rows="4" 
+                                    value={reviewForm.comment} 
+                                    onChange={e => setReviewForm({ ...reviewForm, comment: e.target.value })} 
+                                    placeholder="Tell us about the quality, smell, and effectiveness..." 
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e5e7eb', outline: 'none', fontSize: '1rem', resize: 'none' }} 
+                                />
                             </div>
-                            <div style={{ display: 'flex', gap: '10px', marginTop: '1rem' }}>
-                                <button type="submit" style={{ flex: 1, padding: '12px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Submit Review</button>
-                                <button type="button" onClick={() => setReviewModal({ open: false, product: null })} style={{ padding: '12px 20px', backgroundColor: '#ccc', color: '#333', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
+
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Add Photos</label>
+                                <input 
+                                    type="file" 
+                                    multiple 
+                                    accept="image/*" 
+                                    onChange={e => setReviewForm({ ...reviewForm, images: e.target.files })} 
+                                    style={{ width: '100%', color: '#6b7280', fontSize: '0.9rem' }}
+                                />
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '1rem' }}>
+                                <button type="submit" style={{ flex: 2, padding: '14px', backgroundColor: '#111827', color: 'white', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Submit Review</button>
+                                <button type="button" onClick={() => setReviewModal({ open: false, product: null })} style={{ flex: 1, padding: '14px', backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold' }}>Cancel</button>
                             </div>
                         </form>
                     </div>

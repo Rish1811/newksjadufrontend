@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 
 import { useNavigate } from 'react-router-dom';
 import API_BASE from '../config';
+import { loadRazorpayScript } from '../utils/razorpay';
 
-const ProductCard = ({ _id, name, price, image, rating, category, sizes, onAddToCart, onBuyNow }) => {
+export const ProductCard = ({ _id, name, price, image, rating, category, sizes, onAddToCart, onBuyNow }) => {
     const [selectedSizeIndex, setSelectedSizeIndex] = useState(0);
     const activeSize = sizes && sizes.length > 0 ? sizes[selectedSizeIndex] : null;
 
@@ -82,11 +83,9 @@ const ProductCard = ({ _id, name, price, image, rating, category, sizes, onAddTo
                 position: 'relative',
                 height: '260px',
                 overflow: 'hidden',
-                padding: '20px',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
-                backgroundColor: '#FAF9F6',
                 cursor: 'pointer'
             }}
                 onClick={() => navigate(`/product/${_id}`)}
@@ -110,10 +109,9 @@ const ProductCard = ({ _id, name, price, image, rating, category, sizes, onAddTo
                     </div>
                 )}
                 <img src={imageUrl} alt={name} style={{
-                    maxHeight: '100%',
-                    maxWidth: '100%',
-                    objectFit: 'contain',
-                    filter: 'drop-shadow(0 10px 15px rgba(0, 0, 0, 0.1))',
+                    height: '100%',
+                    width: '100%',
+                    objectFit: 'cover',
                     transition: 'opacity 0.5s ease, transform 0.5s ease',
                     opacity: imageLoaded ? 1 : 0
                 }}
@@ -181,22 +179,33 @@ const ProductCard = ({ _id, name, price, image, rating, category, sizes, onAddTo
                                     setSelectedSizeIndex(idx);
                                 }}
                                 style={{
-                                    padding: '6px 12px',
-                                    border: selectedSizeIndex === idx ? '1px solid transparent' : '1px solid #ddd',
-                                    backgroundColor: selectedSizeIndex === idx ? '#7BA942' : 'transparent',
-                                    color: selectedSizeIndex === idx ? 'white' : '#333',
-                                    borderRadius: '20px',
-                                    fontSize: '0.8rem',
-                                    fontWeight: '600',
+                                    padding: '8px 16px',
+                                    border: selectedSizeIndex === idx ? '1px solid #7BA942' : '1px solid #e5e7eb',
+                                    backgroundColor: selectedSizeIndex === idx ? '#7BA942' : '#fff',
+                                    color: selectedSizeIndex === idx ? 'white' : '#4b5563',
+                                    borderRadius: '12px',
+                                    fontSize: '0.9rem',
+                                    fontWeight: '700',
                                     cursor: 'pointer',
                                     transition: 'all 0.2s ease',
                                     display: 'flex',
                                     flexDirection: 'column',
                                     alignItems: 'center',
-                                    minWidth: '60px'
+                                    minWidth: '100px',
+                                    boxShadow: selectedSizeIndex === idx ? '0 4px 12px rgba(123, 169, 66, 0.2)' : 'none'
                                 }}
                             >
-                                {s.label && <span style={{ fontSize: '0.7rem', opacity: 0.9 }}>{s.label}</span>}
+                                {s.label && (
+                                    <span style={{ 
+                                        fontSize: '0.65rem', 
+                                        textTransform: 'uppercase', 
+                                        marginBottom: '2px',
+                                        opacity: selectedSizeIndex === idx ? 0.9 : 0.6,
+                                        letterSpacing: '0.5px'
+                                    }}>
+                                        {s.label}
+                                    </span>
+                                )}
                                 <span>{s.size}</span>
                             </button>
                         ))}
@@ -263,18 +272,35 @@ const ProductGrid = () => {
     const [showCheckout, setShowCheckout] = useState(false);
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [selectedQty, setSelectedQty] = useState(1);
-    const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [cartItemCount, setCartItemCount] = useState(0);
     const [shippingAddress, setShippingAddress] = useState({ address: '', city: '', postalCode: '', phone: '' });
-    const [orderStatus, setOrderStatus] = useState(null); // success or error
+    const [orderStatus, setOrderStatus] = useState(null);
+    const [paymentConfig, setPaymentConfig] = useState(null);
+
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/payment_settings/config`);
+                if (res.ok) setPaymentConfig(await res.json());
+            } catch (err) { console.error('Config fetch error:', err); }
+        };
+        fetchConfig();
+    }, []);
 
     const navigate = useNavigate();
     const user = JSON.parse(localStorage.getItem('user'));
 
     useEffect(() => {
         const fetchProducts = async () => {
+            const queryParams = new URLSearchParams(window.location.search);
+            const category = queryParams.get('category');
+            
             try {
-                const response = await fetch(`${API_BASE}/api/products`);
+                let url = `${API_BASE}/api/products`;
+                if (category) {
+                    url += `?category=${encodeURIComponent(category)}`;
+                }
+                const response = await fetch(url);
                 const data = await response.json();
                 setProducts(data);
                 setLoading(false);
@@ -285,7 +311,7 @@ const ProductGrid = () => {
         };
 
         fetchProducts();
-    }, []);
+    }, [window.location.search]);
 
     const handleAddToCart = async (product, quantity = 1, silent = false) => {
         if (!user) {
@@ -306,15 +332,14 @@ const ProductGrid = () => {
                     name: product.name,
                     image: product.image,
                     price: product.price,
+                    originalPrice: product.originalPrice || Math.round(product.price * 1.5),
                     qty: quantity
                 })
             });
 
             if (res.ok) {
                 if (!silent) {
-                    setSelectedProduct(product);
-                    setSelectedQty(quantity);
-                    setShowSuccessModal(true);
+                    window.dispatchEvent(new Event('openCart'));
                 }
                 window.dispatchEvent(new Event('cartUpdated'));
                 return true;
@@ -339,8 +364,8 @@ const ProductGrid = () => {
         }
     };
 
-    const handlePlaceOrder = async (e) => {
-        e.preventDefault();
+    const handlePlaceOrder = async (e, method = 'cod') => {
+        if (e) e.preventDefault();
         const orderData = {
             orderItems: [{
                 name: selectedProduct.name,
@@ -350,7 +375,8 @@ const ProductGrid = () => {
                 product: selectedProduct._id
             }],
             shippingAddress,
-            totalPrice: selectedProduct.price * selectedQty
+            totalPrice: selectedProduct.price * selectedQty,
+            paymentMethod: method
         };
 
         try {
@@ -364,19 +390,83 @@ const ProductGrid = () => {
             });
 
             if (res.ok) {
-                setOrderStatus('success');
-                setTimeout(() => {
-                    setShowCheckout(false);
-                    setOrderStatus(null);
-                    setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
-                }, 3000);
+                const createdOrder = await res.json();
+                
+                // If Online Payment is selected and enabled, start payment process
+                if (method === 'online' && paymentConfig && paymentConfig.isEnabled) {
+                    const scriptLoaded = await loadRazorpayScript();
+                    if (!scriptLoaded) {
+                        alert('Razorpay SDK failed to load. Are you online?');
+                        return;
+                    }
+
+                    // Create Razorpay Order
+                    const rpRes = await fetch(`${API_BASE}/api/razorpay/create-order`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            amount: orderData.totalPrice,
+                            receipt: createdOrder._id
+                        })
+                    });
+
+                    if (!rpRes.ok) throw new Error('Razorpay order creation failed');
+                    const rpOrder = await rpRes.json();
+
+                    const options = {
+                        key: paymentConfig.keyId,
+                        amount: rpOrder.amount,
+                        currency: rpOrder.currency,
+                        name: "K'S JADU",
+                        description: "Payment for Order #" + createdOrder._id.slice(-6),
+                        image: "/logo.png",
+                        order_id: rpOrder.id,
+                        handler: async (response) => {
+                            const verifyRes = await fetch(`${API_BASE}/api/razorpay/verify`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    ...response,
+                                    database_order_id: createdOrder._id
+                                })
+                            });
+                            if (verifyRes.ok) {
+                                setOrderStatus('success');
+                                finalizeOrder();
+                            } else {
+                                setOrderStatus('error');
+                            }
+                        },
+                        prefill: {
+                            name: user.name,
+                            email: user.email,
+                            contact: shippingAddress.phone
+                        },
+                        theme: { color: "#6366f1" }
+                    };
+
+                    const rzp = new window.Razorpay(options);
+                    rzp.open();
+                } else {
+                    // COD or simple success
+                    setOrderStatus('success');
+                    finalizeOrder();
+                }
             } else {
                 setOrderStatus('error');
             }
         } catch (error) {
-            console.error(error);
+            console.error('Order error:', error);
             setOrderStatus('error');
         }
+    };
+
+    const finalizeOrder = () => {
+        setTimeout(() => {
+            setShowCheckout(false);
+            setOrderStatus(null);
+            setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
+        }, 3000);
     };
 
     return (
@@ -441,17 +531,22 @@ const ProductGrid = () => {
                                     </div>
                                     <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
                                         <span>Total Price:</span>
-                                        <span>₹{selectedProduct.price * selectedQty} (COD)</span>
+                                        <span>₹{selectedProduct.price * selectedQty}</span>
                                     </div>
-                                    <form onSubmit={handlePlaceOrder} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                                    <form onSubmit={(e) => handlePlaceOrder(e, 'cod')} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
                                         <input type="text" placeholder="Street Address" required value={shippingAddress.address} onChange={(e) => setShippingAddress({ ...shippingAddress, address: e.target.value })} style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
                                         <input type="text" placeholder="City" required value={shippingAddress.city} onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })} style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
                                         <input type="text" placeholder="PIN Code" required value={shippingAddress.postalCode} onChange={(e) => setShippingAddress({ ...shippingAddress, postalCode: e.target.value })} style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
                                         <input type="text" placeholder="Phone Number" required value={shippingAddress.phone} onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })} style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ddd' }} />
 
-                                        <div style={{ display: 'flex', gap: '10px', marginTop: '1rem' }}>
-                                            <button type="submit" style={{ flex: 1, padding: '12px', backgroundColor: 'RGB(0, 0, 128)', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Confirm Order</button>
-                                            <button type="button" onClick={() => setShowCheckout(false)} style={{ flex: 1, padding: '12px', backgroundColor: '#ccc', color: '#333', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '1rem' }}>
+                                            <div style={{ display: 'flex', gap: '10px' }}>
+                                                <button type="submit" style={{ flex: 1, padding: '12px', backgroundColor: 'RGB(0, 0, 128)', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Confirm COD</button>
+                                                {paymentConfig?.isEnabled && (
+                                                    <button type="button" onClick={() => handlePlaceOrder(null, 'online')} style={{ flex: 1, padding: '12px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>Pay Online</button>
+                                                )}
+                                            </div>
+                                            <button type="button" onClick={() => setShowCheckout(false)} style={{ width: '100%', padding: '10px', backgroundColor: '#ccc', color: '#333', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
                                         </div>
                                     </form>
                                 </>

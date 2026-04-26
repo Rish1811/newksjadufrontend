@@ -71,6 +71,7 @@ const ProductDetails = () => {
 
         const activeSize = product.sizes && product.sizes.length > 0 ? product.sizes[selectedSizeIndex] : null;
         const priceToAdd = activeSize ? activeSize.price : product.price;
+        const originalPriceToAdd = activeSize?.originalPrice ? activeSize.originalPrice : Math.round(priceToAdd * 1.5);
 
         setIsAnimating(true);
 
@@ -82,15 +83,19 @@ const ProductDetails = () => {
                     Authorization: `Bearer ${user.token}`
                 },
                 body: JSON.stringify({
-                    productId: product._id,
-                    qty: quantity,
-                    price: priceToAdd
+                    product: product._id,
+                    name: product.name,
+                    image: product.image,
+                    price: priceToAdd,
+                    originalPrice: originalPriceToAdd,
+                    qty: quantity
                 })
             });
 
             if (res.ok) {
                 // Dispatch event so Navbar/others update
                 window.dispatchEvent(new Event('cartUpdated'));
+                window.dispatchEvent(new Event('openCart'));
 
                 setShowToast(true);
 
@@ -119,7 +124,7 @@ const ProductDetails = () => {
     const activeSize = product.sizes && product.sizes.length > 0 ? product.sizes[selectedSizeIndex] : null;
 
     return (
-        <div className="container" style={{ padding: '2rem 1rem', maxWidth: '1200px', margin: '0 auto' }}>
+        <div className="container" style={{ padding: '2rem 1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
                 <div style={{ color: '#666' }}>
                     <span style={{ cursor: 'pointer' }} onClick={() => navigate('/shop')}>Back to: <span style={{ textDecoration: 'underline', color: 'rgb(0, 0, 128)', fontWeight: 'bold' }}>Shop All</span></span>
@@ -145,9 +150,6 @@ const ProductDetails = () => {
                 <div style={{ position: 'relative' }}>
                     <div style={{ backgroundColor: '#EDF5FD', borderRadius: '15px', padding: '2rem', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '500px', position: 'relative', overflow: 'hidden' }}>
                         <img src={getImageUrl(mainImage)} alt={product.name} style={{ width: '80%', height: 'auto', objectFit: 'contain', zIndex: 2 }} />
-                        <div style={{ position: 'absolute', top: '20px', left: '20px', width: '120px', height: '120px', backgroundColor: '#FCD74A', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', textAlign: 'center', fontWeight: 'bold', color: '#333', zIndex: 3, boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
-                            <span style={{ fontSize: '1.2rem', lineHeight: '1.2' }}>bought by<br /><span style={{ fontSize: '1.8rem', fontWeight: '900' }}>2.1k+</span><br />families</span>
-                        </div>
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px', marginTop: '1rem', overflowX: 'auto', paddingBottom: '10px' }}>
@@ -176,9 +178,16 @@ const ProductDetails = () => {
                     </h1>
 
                     <div style={{ marginBottom: '1.5rem', color: '#444', fontSize: '1.05rem', lineHeight: 1.6 }}>
-                        <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>What if clean meant safer homes?</p>
+                        <p style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#111' }}>{product.overview || 'The perfect solution for your home.'}</p>
                         <p>{product.description}</p>
                     </div>
+
+                    {product.howToUse && (
+                        <div style={{ marginBottom: '1.5rem', padding: '1rem', backgroundColor: '#F8FAFC', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+                            <h4 style={{ fontSize: '0.9rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748B', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>How to Use</h4>
+                            <p style={{ fontSize: '0.95rem', color: '#334155', lineHeight: 1.5 }}>{product.howToUse}</p>
+                        </div>
+                    )}
 
                     {product.bulletPoints && product.bulletPoints.length > 0 && (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem', borderTop: '1px solid #eee', borderBottom: '1px solid #eee', padding: '1.5rem 0' }}>
