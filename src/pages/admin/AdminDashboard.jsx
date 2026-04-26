@@ -1114,11 +1114,11 @@ const AdminDashboard = () => {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingLeft: '20px', borderLeft: '1px solid rgba(255,255,255,0.05)' }}>
                             <div style={{ textAlign: 'right' }}>
-                                <p style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{adminUser.name}</p>
+                                <p style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{adminUser?.name || 'Admin'}</p>
                                 <p style={{ fontSize: '0.7rem', color: '#475569' }}>Administrator</p>
                             </div>
                             <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg, #6366f1, #ec4899)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
-                                {adminUser.name[0]}
+                                {adminUser?.name?.[0] || 'A'}
                             </div>
                         </div>
                     </div>
