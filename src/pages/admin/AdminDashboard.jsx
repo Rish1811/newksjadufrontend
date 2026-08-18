@@ -131,7 +131,11 @@ const AdminDashboard = () => {
             if (uRes.ok) setUsers(await uRes.json());
             if (pRes.ok) setProducts(await pRes.json());
             if (bRes.ok) setBanners(await bRes.json());
-            if (oRes.ok) setOrders(await oRes.json());
+            // /api/orders is paginated and returns { orders, page, pages, total }.
+            if (oRes.ok) {
+                const payload = await oRes.json();
+                setOrders(Array.isArray(payload) ? payload : payload.orders || []);
+            }
             if (cRes.ok) setCategories(await cRes.json());
             if (aRes.ok) setAnnouncements(await aRes.json());
             if (sRes.ok) setPaymentSettings(await sRes.json());

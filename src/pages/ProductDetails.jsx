@@ -1,387 +1,322 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import API_BASE from '../config';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { api, imageUrl, formatPrice } from '../api/client';
+import { useApp } from '../context/AppContext';
+import Skeleton from '../components/Skeleton';
 
 const ProductDetails = () => {
     const { id } = useParams();
     const navigate = useNavigate();
+    const { addToCart } = useApp();
+
     const [product, setProduct] = useState(null);
+    const [siblings, setSiblings] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [notFound, setNotFound] = useState(false);
     const [selectedSizeIndex, setSelectedSizeIndex] = useState(0);
     const [quantity, setQuantity] = useState(1);
     const [mainImage, setMainImage] = useState('');
     const [openAccordion, setOpenAccordion] = useState('');
-    const [prevProduct, setPrevProduct] = useState(null);
-    const [nextProduct, setNextProduct] = useState(null);
-    const [isAnimating, setIsAnimating] = useState(false);
-    const [showToast, setShowToast] = useState(false);
-
-    const getImageUrl = (path) => {
-        if (!path) return '';
-        return path.startsWith('http') ? path : `${API_BASE}${path}`;
-    };
+    const [adding, setAdding] = useState(false);
 
     useEffect(() => {
-        const fetchProduct = async () => {
-            setLoading(true);
-            try {
-                const res = await fetch(`${API_BASE}/api/products/${id}`);
-                const data = await res.json();
+        const controller = new AbortController();
+        setLoading(true);
+        setNotFound(false);
+        setSelectedSizeIndex(0);
+        setQuantity(1);
 
-                // Fetch all products to determine prev/next sequence
-                const allRes = await fetch(`${API_BASE}/api/products`);
-                const allData = await allRes.json();
+        Promise.all([
+            api.get(`/api/products/${id}`, { auth: false, signal: controller.signal }),
+            api.get('/api/products', { auth: false, signal: controller.signal }).catch(() => []),
+        ])
+            .then(([data, all]) => {
+                setProduct(data);
+                setMainImage(data.image);
+                setSiblings(Array.isArray(all) ? all : []);
+            })
+            .catch((err) => {
+                if (err.name === 'AbortError') return;
+                setNotFound(true);
+            })
+            .finally(() => { if (!controller.signal.aborted) setLoading(false); });
 
-                if (res.ok) {
-                    setProduct(data);
-                    setMainImage(data.image);
-
-                    if (allRes.ok && Array.isArray(allData)) {
-                        const currentIndex = allData.findIndex(p => p._id === id);
-                        if (currentIndex > 0) {
-                            setPrevProduct(allData[currentIndex - 1]);
-                        } else {
-                            setPrevProduct(null);
-                        }
-
-                        if (currentIndex !== -1 && currentIndex < allData.length - 1) {
-                            setNextProduct(allData[currentIndex + 1]);
-                        } else {
-                            setNextProduct(null);
-                        }
-                    }
-                } else {
-                    console.error('Failed to fetch product');
-                }
-            } catch (error) {
-                console.error(error);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchProduct();
+        return () => controller.abort();
     }, [id]);
 
+    const { prevProduct, nextProduct } = useMemo(() => {
+        const index = siblings.findIndex((p) => p._id === id);
+        return {
+            prevProduct: index > 0 ? siblings[index - 1] : null,
+            nextProduct: index !== -1 && index < siblings.length - 1 ? siblings[index + 1] : null,
+        };
+    }, [siblings, id]);
+
+    const activeSize = product?.sizes?.length ? product.sizes[selectedSizeIndex] : null;
+    const unitPrice = activeSize ? activeSize.price : product?.price ?? 0;
+    const originalPrice = activeSize?.originalPrice > unitPrice ? activeSize.originalPrice : null;
+    const inStock = (product?.countInStock ?? 0) > 0;
+    const maxQty = Math.min(product?.countInStock ?? 1, 20);
+
     const handleAddToCart = async () => {
-        const user = JSON.parse(localStorage.getItem('user'));
-        if (!user) {
-            navigate('/login');
-            return;
-        }
-
-        const activeSize = product.sizes && product.sizes.length > 0 ? product.sizes[selectedSizeIndex] : null;
-        const priceToAdd = activeSize ? activeSize.price : product.price;
-        const originalPriceToAdd = activeSize?.originalPrice ? activeSize.originalPrice : Math.round(priceToAdd * 1.5);
-
-        setIsAnimating(true);
-
-        try {
-            const res = await fetch(`${API_BASE}/api/cart`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${user.token}`
-                },
-                body: JSON.stringify({
-                    product: product._id,
-                    name: product.name,
-                    image: product.image,
-                    price: priceToAdd,
-                    originalPrice: originalPriceToAdd,
-                    qty: quantity
-                })
-            });
-
-            if (res.ok) {
-                // Dispatch event so Navbar/others update
-                window.dispatchEvent(new Event('cartUpdated'));
-                window.dispatchEvent(new Event('openCart'));
-
-                setShowToast(true);
-
-                setTimeout(() => {
-                    setIsAnimating(false);
-                }, 500);
-
-                setTimeout(() => {
-                    setShowToast(false);
-                }, 2000);
-            } else {
-                alert('Error adding to cart');
-                setIsAnimating(false);
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Something went wrong');
-            setIsAnimating(false);
-        }
+        setAdding(true);
+        await addToCart(product._id, { qty: quantity, size: activeSize?.size });
+        setAdding(false);
     };
 
-    if (loading) return <div style={{ minHeight: '80vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>Loading product details...</div>;
-    if (!product) return <div style={{ minHeight: '80vh', textAlign: 'center', padding: '4rem' }}><h2>Product not found</h2><button onClick={() => navigate('/shop')} className="btn btn-primary" style={{ marginTop: '1rem' }}>Back to Shop</button></div>;
-
-    const allImages = [product.image, ...(product.additionalImages || [])].filter(Boolean);
-    const activeSize = product.sizes && product.sizes.length > 0 ? product.sizes[selectedSizeIndex] : null;
-
-    return (
-        <div className="container" style={{ padding: '2rem 1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                <div style={{ color: '#666' }}>
-                    <span style={{ cursor: 'pointer' }} onClick={() => navigate('/shop')}>Back to: <span style={{ textDecoration: 'underline', color: 'rgb(0, 0, 128)', fontWeight: 'bold' }}>Shop All</span></span>
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px', fontSize: '1rem', color: 'rgb(0, 0, 128)', alignItems: 'center' }}>
-                    {prevProduct && (
-                        <span style={{ cursor: 'pointer', borderBottom: '1px solid #aaa', paddingBottom: '1px' }} onClick={() => navigate(`/product/${prevProduct._id}`)}>Previous</span>
-                    )}
-
-                    {prevProduct && nextProduct && (
-                        <span style={{ color: '#000', margin: '0 2px' }}>/</span>
-                    )}
-
-                    {nextProduct && (
-                        <span style={{ cursor: 'pointer', borderBottom: '1px solid #aaa', paddingBottom: '1px' }} onClick={() => navigate(`/product/${nextProduct._id}`)}>Next</span>
-                    )}
+    if (loading) {
+        return (
+            <div className="container" style={{ padding: '2rem 1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '3rem' }}>
+                    <Skeleton height={480} radius={20} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <Skeleton width="35%" height={22} />
+                        <Skeleton width="80%" height={40} />
+                        <Skeleton height={80} />
+                        <Skeleton width="45%" height={32} />
+                        <Skeleton height={52} radius={30} />
+                    </div>
                 </div>
             </div>
+        );
+    }
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '4rem' }}>
-                {/* Left Side: Images */}
-                <div style={{ position: 'relative' }}>
-                    <div style={{ backgroundColor: '#EDF5FD', borderRadius: '15px', padding: '2rem', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '500px', position: 'relative', overflow: 'hidden' }}>
-                        <img src={getImageUrl(mainImage)} alt={product.name} style={{ width: '80%', height: 'auto', objectFit: 'contain', zIndex: 2 }} />
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '1rem', overflowX: 'auto', paddingBottom: '10px' }}>
-                        {allImages.map((img, idx) => (
-                            <div key={idx} onClick={() => setMainImage(img)} style={{
-                                width: '80px', height: '80px', flexShrink: 0, borderRadius: '8px', border: mainImage === img ? '2px solid rgb(0, 0, 128)' : '1px solid #ddd',
-                                overflow: 'hidden', cursor: 'pointer', backgroundColor: '#f9f9f9', padding: '5px'
-                            }}>
-                                <img src={getImageUrl(img)} alt={`Thumbnail ${idx}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                            </div>
-                        ))}
-                    </div>
+    if (notFound || !product) {
+        return (
+            <div className="container">
+                <div className="state-panel" style={{ minHeight: '60vh' }}>
+                    <div className="state-panel__icon">🧴</div>
+                    <h2 className="state-panel__title">Product not found</h2>
+                    <p className="state-panel__text">This product may have been removed from the store.</p>
+                    <Link to="/shop" className="btn btn-primary">Back to shop</Link>
                 </div>
+            </div>
+        );
+    }
 
-                {/* Right Side: Details */}
+    const allImages = [product.image, ...(product.additionalImages || [])].filter(Boolean);
+    const ratingValue = Number(product.rating || 0);
+
+    return (
+        <div className="container" style={{ padding: '2rem 1rem 4rem' }}>
+            <nav style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', fontSize: '0.9rem', gap: 12, flexWrap: 'wrap' }}>
+                <Link to="/shop" style={{ color: 'var(--color-text-muted)' }}>
+                    ← Back to <span style={{ color: 'var(--color-primary)', fontWeight: 700 }}>Shop All</span>
+                </Link>
+                <div style={{ display: 'flex', gap: 12, color: 'var(--color-primary)' }}>
+                    {prevProduct && <button type="button" onClick={() => navigate(`/product/${prevProduct._id}`)} style={{ fontWeight: 600 }}>Previous</button>}
+                    {prevProduct && nextProduct && <span style={{ color: 'var(--color-border-strong)' }}>|</span>}
+                    {nextProduct && <button type="button" onClick={() => navigate(`/product/${nextProduct._id}`)} style={{ fontWeight: 600 }}>Next</button>}
+                </div>
+            </nav>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '3rem' }}>
                 <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1rem' }}>
-                        <div style={{ backgroundColor: '#F0F9ED', padding: '4px 10px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px', color: '#333' }}>
-                            <span style={{ color: '#FFB800' }}>★★★★☆</span> 4.70/5
-                        </div>
-                        <span style={{ fontSize: '0.85rem', color: '#666', backgroundColor: '#f0f0f0', padding: '4px 10px', borderRadius: '20px' }}>376 reviews</span>
+                    <div style={{ backgroundColor: 'var(--color-surface-alt)', borderRadius: 'var(--radius-lg)', padding: '2rem', display: 'grid', placeItems: 'center', minHeight: 420, border: '1px solid var(--color-border)' }}>
+                        <img
+                            src={imageUrl(mainImage)}
+                            alt={product.name}
+                            // The hero image is what the visitor came to see, so it
+                            // loads eagerly at high priority rather than lazily.
+                            fetchPriority="high"
+                            decoding="async"
+                            style={{ width: '80%', height: 'auto', objectFit: 'contain' }}
+                        />
                     </div>
 
-                    <h1 style={{ fontSize: '2.2rem', color: 'rgb(0, 0, 128)', marginBottom: '1rem', lineHeight: 1.2 }}>
-                        {product.name} {activeSize ? `- ${activeSize.size}` : ''}
-                    </h1>
-
-                    <div style={{ marginBottom: '1.5rem', color: '#444', fontSize: '1.05rem', lineHeight: 1.6 }}>
-                        <p style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#111' }}>{product.overview || 'The perfect solution for your home.'}</p>
-                        <p>{product.description}</p>
-                    </div>
-
-                    {product.howToUse && (
-                        <div style={{ marginBottom: '1.5rem', padding: '1rem', backgroundColor: '#F8FAFC', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-                            <h4 style={{ fontSize: '0.9rem', fontWeight: '800', textTransform: 'uppercase', color: '#64748B', marginBottom: '0.5rem', letterSpacing: '0.05em' }}>How to Use</h4>
-                            <p style={{ fontSize: '0.95rem', color: '#334155', lineHeight: 1.5 }}>{product.howToUse}</p>
-                        </div>
-                    )}
-
-                    {product.bulletPoints && product.bulletPoints.length > 0 && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '2rem', borderTop: '1px solid #eee', borderBottom: '1px solid #eee', padding: '1.5rem 0' }}>
-                            {product.bulletPoints.map((point, idx) => (
-                                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.95rem', color: '#333' }}>
-                                    <div style={{ width: '20px', height: '20px', borderRadius: '50%', backgroundColor: '#E8F5E9', color: '#4CAF50', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: '0.8rem' }}>✓</div>
-                                    {point}
-                                </div>
+                    {allImages.length > 1 && (
+                        <div className="no-scrollbar" style={{ display: 'flex', gap: 10, marginTop: '1rem', overflowX: 'auto' }}>
+                            {allImages.map((img, idx) => (
+                                <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => setMainImage(img)}
+                                    aria-label={`View image ${idx + 1}`}
+                                    aria-pressed={mainImage === img}
+                                    style={{
+                                        width: 76, height: 76, flexShrink: 0,
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: `2px solid ${mainImage === img ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                                        overflow: 'hidden', backgroundColor: 'var(--color-surface-alt)', padding: 5,
+                                    }}
+                                >
+                                    <img src={imageUrl(img)} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                </button>
                             ))}
                         </div>
                     )}
+                </div>
 
-                    {product.sizes && product.sizes.length > 0 && (
+                <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1rem', flexWrap: 'wrap' }}>
+                        {/* Real numbers from the product, not the fixed 4.70 / 376 that
+                            used to appear on every single product page. */}
+                        {product.numReviews > 0 ? (
+                            <>
+                                <span className="badge badge--success">
+                                    <span style={{ color: 'var(--color-star)' }}>★</span> {ratingValue.toFixed(2)}/5
+                                </span>
+                                <span className="badge badge--neutral">{product.numReviews} review{product.numReviews === 1 ? '' : 's'}</span>
+                            </>
+                        ) : (
+                            <span className="badge badge--neutral">No reviews yet</span>
+                        )}
+                        {inStock ? (
+                            product.countInStock <= 5 && <span className="badge badge--warning">Only {product.countInStock} left</span>
+                        ) : (
+                            <span className="badge badge--danger">Out of stock</span>
+                        )}
+                    </div>
+
+                    <h1 style={{ fontSize: 'clamp(1.6rem, 4vw, 2.2rem)', marginBottom: '1rem', lineHeight: 1.2, fontWeight: 800 }}>
+                        {product.name}{activeSize ? ` — ${activeSize.size}` : ''}
+                    </h1>
+
+                    <div style={{ marginBottom: '1.5rem', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                        {product.overview && <p style={{ fontWeight: 700, marginBottom: '0.5rem', color: 'var(--color-text)' }}>{product.overview}</p>}
+                        <p>{product.description}</p>
+                    </div>
+
+                    {product.bulletPoints?.length > 0 && (
+                        <ul style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.9rem', marginBottom: '2rem', borderTop: '1px solid var(--color-border)', borderBottom: '1px solid var(--color-border)', padding: '1.4rem 0' }}>
+                            {product.bulletPoints.map((point, idx) => (
+                                <li key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.95rem' }}>
+                                    <span style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent)', display: 'grid', placeItems: 'center', fontSize: '0.75rem', flexShrink: 0 }}>✓</span>
+                                    {point}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+
+                    {product.sizes?.length > 0 ? (
                         <div style={{ marginBottom: '2rem' }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '1rem', fontSize: '1.1rem' }}>Size</div>
-                            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                            <div style={{ fontWeight: 700, marginBottom: '0.9rem' }}>Size</div>
+                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }} role="group" aria-label="Choose a size">
                                 {product.sizes.map((s, idx) => (
-                                    <div key={idx} onClick={() => setSelectedSizeIndex(idx)} style={{
-                                        position: 'relative', padding: '15px', borderRadius: '8px', cursor: 'pointer', width: '120px', textAlign: 'center',
-                                        border: selectedSizeIndex === idx ? '2px solid rgb(0, 0, 128)' : '1px solid #ddd', backgroundColor: 'white'
-                                    }}>
+                                    <button
+                                        key={idx}
+                                        type="button"
+                                        aria-pressed={selectedSizeIndex === idx}
+                                        onClick={() => setSelectedSizeIndex(idx)}
+                                        style={{
+                                            position: 'relative', padding: '14px 12px',
+                                            borderRadius: 'var(--radius-md)', width: 122, textAlign: 'center',
+                                            border: `2px solid ${selectedSizeIndex === idx ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                                            backgroundColor: 'var(--color-surface)',
+                                        }}
+                                    >
                                         {s.label && (
-                                            <div style={{ position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#9B51E0', color: 'white', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '10px', whiteSpace: 'nowrap' }}>
+                                            <span style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', backgroundColor: 'var(--color-primary)', color: 'var(--color-on-primary)', fontSize: '0.65rem', padding: '2px 9px', borderRadius: 'var(--radius-pill)', whiteSpace: 'nowrap', fontWeight: 700 }}>
                                                 {s.label}
-                                            </div>
+                                            </span>
                                         )}
-                                        <div style={{ fontWeight: 'bold', marginTop: '5px' }}>{s.size}</div>
-                                        <div style={{ marginTop: '5px', fontSize: '1.1rem', fontWeight: '900' }}>₹ {s.price}</div>
-                                        {s.originalPrice && <div style={{ fontSize: '0.85rem', color: '#999', textDecoration: 'line-through' }}>₹ {s.originalPrice}</div>}
-                                    </div>
+                                        <div style={{ fontWeight: 700, marginTop: 4 }}>{s.size}</div>
+                                        <div style={{ marginTop: 4, fontSize: '1.05rem', fontWeight: 800 }}>{formatPrice(s.price)}</div>
+                                        {s.originalPrice > s.price && (
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', textDecoration: 'line-through' }}>{formatPrice(s.originalPrice)}</div>
+                                        )}
+                                    </button>
                                 ))}
                             </div>
                         </div>
-                    )}
-
-                    {(!product.sizes || product.sizes.length === 0) && (
-                        <div style={{ marginBottom: '2rem', fontSize: '1.5rem', fontWeight: 'bold', color: 'rgb(0, 0, 128)' }}>
-                            ₹ {product.price}
+                    ) : (
+                        <div style={{ marginBottom: '2rem', display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                            <span style={{ fontSize: '1.8rem', fontWeight: 800 }}>{formatPrice(unitPrice)}</span>
+                            {originalPrice && <span style={{ fontSize: '1rem', color: 'var(--color-text-faint)', textDecoration: 'line-through' }}>{formatPrice(originalPrice)}</span>}
                         </div>
                     )}
 
-                    <style>
-                        {`
-                            @keyframes bounceIcon {
-                                0% { transform: scale(1); }
-                                50% { transform: scale(1.05); }
-                                100% { transform: scale(1); }
-                            }
-                            @keyframes slideInUp {
-                                from { transform: translateY(10px); opacity: 0; }
-                                to { transform: translateY(0); opacity: 1; }
-                            }
-                        `}
-                    </style>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '2rem', position: 'relative' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', border: '1px solid #ddd', borderRadius: '30px', overflow: 'hidden', height: '50px' }}>
-                            <button onClick={() => setQuantity(Math.max(1, quantity - 1))} style={{ padding: '0 15px', border: 'none', backgroundColor: 'white', cursor: 'pointer', fontSize: '1.2rem' }}>-</button>
-                            <div style={{ padding: '0 15px', fontWeight: 'bold', fontSize: '1.1rem', width: '40px', textAlign: 'center' }}>{quantity}</div>
-                            <button onClick={() => setQuantity(quantity + 1)} style={{ padding: '0 15px', border: 'none', backgroundColor: 'white', cursor: 'pointer', fontSize: '1.2rem' }}>+</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', border: '1.5px solid var(--color-border)', borderRadius: 'var(--radius-pill)', height: 52, background: 'var(--color-surface)' }}>
+                            <button type="button" onClick={() => setQuantity((q) => Math.max(1, q - 1))} disabled={quantity <= 1} aria-label="Decrease quantity" style={{ padding: '0 18px', fontSize: '1.2rem', height: '100%' }}>−</button>
+                            <span aria-live="polite" style={{ padding: '0 6px', fontWeight: 700, minWidth: 34, textAlign: 'center' }}>{quantity}</span>
+                            {/* Capped at available stock so the user can't queue up a
+                                quantity the server is going to reject. */}
+                            <button type="button" onClick={() => setQuantity((q) => Math.min(maxQty, q + 1))} disabled={quantity >= maxQty} aria-label="Increase quantity" style={{ padding: '0 18px', fontSize: '1.2rem', height: '100%' }}>+</button>
                         </div>
+
                         <button
+                            type="button"
+                            className="btn btn-accent btn-lg"
                             onClick={handleAddToCart}
-                            style={{
-                                flex: 1,
-                                height: '50px',
-                                backgroundColor: '#28a745',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '30px',
-                                fontWeight: 'bold',
-                                fontSize: '1.1rem',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                gap: '10px',
-                                transition: 'all 0.3s ease',
-                                animation: isAnimating ? 'bounceIcon 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)' : 'none',
-                                boxShadow: '0 4px 10px rgba(40, 167, 69, 0.3)'
-                            }}
-                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#218838'}
-                            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
+                            disabled={!inStock || adding}
+                            style={{ flex: 1, minWidth: 200, height: 52 }}
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>
-                            Add to cart
+                            {!inStock ? 'Out of stock' : adding ? 'Adding…' : `Add to cart · ${formatPrice(unitPrice * quantity)}`}
                         </button>
+                    </div>
 
-                        {/* SUCCESS TOOLTIP */}
-                        {showToast && (
-                            <div style={{
-                                position: 'absolute',
-                                bottom: '-35px',
-                                right: '0',
-                                backgroundColor: '#28a745',
-                                color: 'white',
-                                padding: '6px 12px',
-                                borderRadius: '6px',
-                                fontSize: '0.85rem',
-                                fontWeight: 'bold',
-                                zIndex: 100,
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                                animation: 'slideInUp 0.3s ease-out',
-                                whiteSpace: 'nowrap'
-                            }}>
-                                Added in card! ✅
+                    <div style={{ display: 'flex', gap: 14, marginBottom: '2rem' }}>
+                        {[['🚚', 'Cash on delivery'], ['⚡', 'Fast dispatch'], ['🌿', 'Plant based']].map(([icon, label]) => (
+                            <div key={label} style={{ flex: 1, textAlign: 'center', padding: '14px 8px', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ fontSize: '1.4rem' }}>{icon}</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, marginTop: 4 }}>{label}</div>
                             </div>
-                        )}
+                        ))}
                     </div>
 
-                    <div style={{ padding: '15px', backgroundColor: '#F8F9FA', borderRadius: '8px', marginBottom: '2rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px' }}>
-                        <img src="/visa.png" alt="Visa" style={{ height: '20px', filter: 'grayscale(0)', opacity: 0.8 }} onError={(e) => e.target.style.display = "none"} />
-                        <span style={{ fontWeight: 'bold', color: '#1434CB', display: 'none' }}>VISA</span>
-                        <div style={{ display: 'flex', gap: '15px', alignItems: 'center', fontWeight: 'bold', color: '#666', fontSize: '0.9rem' }}>
-                            <span>💳 VISA</span>
-                            <span>🔴🟡 MC</span>
-                            <span>Paytm</span>
-                            <span>UPI</span>
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '15px', marginBottom: '2rem' }}>
-                        <div style={{ flex: 1, textAlign: 'center', padding: '15px', border: '1px solid #eee', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
-                            <div style={{ fontSize: '1.5rem' }}>🚚</div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>COD Available</div>
-                        </div>
-                        <div style={{ flex: 1, textAlign: 'center', padding: '15px', border: '1px solid #eee', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
-                            <div style={{ fontSize: '1.5rem' }}>⚡</div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Fast Delivery</div>
-                        </div>
-                    </div>
-
-                    {/* Accordions */}
-                    <div style={{ borderTop: '1px solid #ddd' }}>
-                        <div onClick={() => setOpenAccordion(openAccordion === 'overview' ? '' : 'overview')} style={{ padding: '1.2rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', borderBottom: '1px solid #ddd', fontWeight: 'bold', fontSize: '1.1rem' }}>
-                            Overview
-                            <span>{openAccordion === 'overview' ? '−' : '+'}</span>
-                        </div>
-                        {openAccordion === 'overview' && (
-                            <div style={{ padding: '1rem 0', color: '#555', lineHeight: '1.6', fontSize: '0.95rem' }}>
-                                {product.overview ? product.overview : 'No overview provided.'}
-                            </div>
-                        )}
-
-                        <div onClick={() => setOpenAccordion(openAccordion === 'howto' ? '' : 'howto')} style={{ padding: '1.2rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', borderBottom: '1px solid #ddd', fontWeight: 'bold', fontSize: '1.1rem' }}>
-                            How To Use
-                            <span>{openAccordion === 'howto' ? '−' : '+'}</span>
-                        </div>
-                        {openAccordion === 'howto' && (
-                            <div style={{ padding: '1rem 0', color: '#555', lineHeight: '1.6', fontSize: '0.95rem' }}>
-                                {product.howToUse ? product.howToUse : 'No instructions provided.'}
-                            </div>
-                        )}
-                    </div>
-
-                </div>
-            </div>
-
-            {/* Product Reviews Section */}
-            <div style={{ marginTop: '5rem', borderTop: '1px solid #eee', paddingTop: '3rem' }}>
-                <h2 style={{ color: 'rgb(0, 0, 128)', marginBottom: '1.5rem', textAlign: 'center' }}>Customer Reviews</h2>
-
-                {product.reviews && product.reviews.length > 0 ? (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem' }}>
-                        {product.reviews.map((review, idx) => (
-                            <div key={idx} style={{ padding: '1.5rem', border: '1px solid #eee', borderRadius: '15px', backgroundColor: '#fafafa' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                                    <span style={{ fontWeight: 'bold' }}>{review.name}</span>
-                                    <span style={{ color: '#FFB800' }}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</span>
-                                </div>
-                                <div style={{ fontSize: '0.85rem', color: '#888', marginBottom: '1rem' }}>
-                                    {new Date(review.createdAt).toLocaleDateString()}
-                                </div>
-                                <p style={{ color: '#444', lineHeight: '1.5', fontSize: '0.95rem', marginBottom: '1rem' }}>
-                                    {review.comment}
-                                </p>
-                                {review.images && review.images.length > 0 && (
-                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                                        {review.images.map((img, i) => (
-                                            <div key={i} style={{ width: '80px', height: '80px', borderRadius: '8px', overflow: 'hidden' }}>
-                                                <img src={getImageUrl(img)} alt="Review photo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                            </div>
-                                        ))}
+                    <div style={{ borderTop: '1px solid var(--color-border)' }}>
+                        {[
+                            ['overview', 'Overview', product.overview],
+                            ['howto', 'How to use', product.howToUse],
+                        ].map(([key, label, content]) => (
+                            <div key={key}>
+                                <button
+                                    type="button"
+                                    onClick={() => setOpenAccordion((cur) => (cur === key ? '' : key))}
+                                    aria-expanded={openAccordion === key}
+                                    style={{ width: '100%', padding: '1.1rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-border)', fontWeight: 700, fontSize: '1.05rem' }}
+                                >
+                                    {label}
+                                    <span>{openAccordion === key ? '−' : '+'}</span>
+                                </button>
+                                {openAccordion === key && (
+                                    <div style={{ padding: '1rem 0', color: 'var(--color-text-muted)', lineHeight: 1.6, fontSize: '0.95rem' }}>
+                                        {content || 'Not provided for this product yet.'}
                                     </div>
                                 )}
                             </div>
                         ))}
                     </div>
+                </div>
+            </div>
+
+            <section style={{ marginTop: '4rem', borderTop: '1px solid var(--color-border)', paddingTop: '2.5rem' }}>
+                <h2 className="section-title" style={{ fontSize: '1.7rem' }}>Customer reviews</h2>
+
+                {product.reviews?.length > 0 ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '1.5rem' }}>
+                        {product.reviews.map((review, idx) => (
+                            <article key={idx} className="card" style={{ padding: '1.4rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                                    <span style={{ fontWeight: 700 }}>{review.name}</span>
+                                    <span style={{ color: 'var(--color-star)', flexShrink: 0 }} aria-label={`${review.rating} out of 5`}>
+                                        {'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}
+                                    </span>
+                                </div>
+                                {review.title && <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 6 }}>{review.title}</h3>}
+                                <div style={{ fontSize: '0.82rem', color: 'var(--color-text-faint)', marginBottom: 12 }}>
+                                    {review.createdAt ? new Date(review.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                                </div>
+                                <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.55, fontSize: '0.95rem', marginBottom: review.images?.length ? '1rem' : 0 }}>
+                                    {review.comment}
+                                </p>
+                                {review.images?.length > 0 && (
+                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                        {review.images.map((img, i) => (
+                                            <img key={i} src={imageUrl(img)} alt="" loading="lazy" decoding="async" style={{ width: 74, height: 74, borderRadius: 'var(--radius-sm)', objectFit: 'cover' }} />
+                                        ))}
+                                    </div>
+                                )}
+                            </article>
+                        ))}
+                    </div>
                 ) : (
-                    <div style={{ textAlign: 'center', color: '#666', fontStyle: 'italic', padding: '2rem' }}>
-                        No reviews yet. Be the first to review this product after purchase!
+                    <div className="state-panel" style={{ padding: '2rem' }}>
+                        <p className="state-panel__text">No reviews yet — be the first once your order arrives.</p>
                     </div>
                 )}
-            </div>
+            </section>
         </div>
     );
 };

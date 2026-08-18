@@ -1,186 +1,140 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import API_BASE from '../config';
-import { ProductCard } from './ProductGrid';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { api } from '../api/client';
+import ProductCard from './ProductCard';
+import { ProductCardSkeleton } from './Skeleton';
 
-const ProductRow = ({ title, section, badgeText, products: initialProducts }) => {
-    const [products, setProducts] = useState(initialProducts || []);
-    const [loading, setLoading] = useState(!initialProducts);
+/**
+ * Horizontal product rail for the home page.
+ *
+ * All five rails ask for the same product list, so they share one cached
+ * request from the API client instead of firing five identical fetches.
+ */
+const ProductRow = ({ title, section, badgeText }) => {
+    const [products, setProducts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
     const scrollRef = useRef(null);
-    const navigate = useNavigate();
-    const user = JSON.parse(localStorage.getItem('user'));
 
     useEffect(() => {
-        if (initialProducts) return;
-        const fetchProducts = async () => {
-            try {
-                const response = await fetch(`${API_BASE}/api/products`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const filtered = section ? data.filter(p => p.displaySection === section) : data;
-                    setProducts(filtered);
-                }
-            } catch (error) {
-                console.error(`Error fetching products for ${section}:`, error);
-            } finally {
-                setLoading(false);
-            }
+        const controller = new AbortController();
+
+        api.get('/api/products', { auth: false, signal: controller.signal })
+            .then((data) => {
+                const all = Array.isArray(data) ? data : [];
+                setProducts(section ? all.filter((p) => p.displaySection === section) : all);
+            })
+            .catch((err) => { if (err.name !== 'AbortError') setProducts([]); })
+            .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+
+        return () => controller.abort();
+    }, [section]);
+
+    // Hide an arrow when there is nothing more to scroll to in that direction.
+    const updateArrows = useCallback(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 8);
+        setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 8);
+    }, []);
+
+    useEffect(() => {
+        updateArrows();
+        const el = scrollRef.current;
+        if (!el) return;
+        el.addEventListener('scroll', updateArrows, { passive: true });
+        window.addEventListener('resize', updateArrows);
+        return () => {
+            el.removeEventListener('scroll', updateArrows);
+            window.removeEventListener('resize', updateArrows);
         };
-        fetchProducts();
-    }, [section, initialProducts]);
+    }, [products, updateArrows]);
 
     const scroll = (direction) => {
-        const { current } = scrollRef;
-        if (current) {
-            const scrollAmount = 340; // Card width + gap
-            current.scrollBy({
-                left: direction === 'left' ? -scrollAmount : scrollAmount,
-                behavior: 'smooth'
-            });
-        }
+        const el = scrollRef.current;
+        if (!el) return;
+        el.scrollBy({ left: direction === 'left' ? -el.clientWidth * 0.8 : el.clientWidth * 0.8, behavior: 'smooth' });
     };
 
-    const handleAddToCart = async (product, quantity = 1, silent = false) => {
-        if (!user) { navigate('/login'); return false; }
-        try {
-            const res = await fetch(`${API_BASE}/api/cart`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${user.token}`
-                },
-                body: JSON.stringify({
-                    product: product._id,
-                    name: product.name,
-                    image: product.image,
-                    price: product.price,
-                    qty: quantity
-                })
-            });
-            if (res.ok) {
-                if (!silent) window.dispatchEvent(new Event('openCart'));
-                window.dispatchEvent(new Event('cartUpdated'));
-                return true;
-            }
-        } catch (error) { console.error(error); }
-        return false;
-    };
+    if (loading) {
+        return (
+            <section className="section" style={{ paddingBottom: 0 }}>
+                <div className="container">
+                    <h2 className="section-title">{title}</h2>
+                    <div style={{ display: 'flex', gap: 24, overflow: 'hidden' }}>
+                        {[0, 1, 2, 3].map((i) => (
+                            <div key={i} style={{ minWidth: 300, flexShrink: 0 }}><ProductCardSkeleton /></div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+        );
+    }
 
-    if (loading || (products && products.length === 0)) return null;
+    // An empty section simply doesn't render - no bare heading over a gap.
+    if (products.length === 0) return null;
+
+    const arrowStyle = (side, enabled) => ({
+        position: 'absolute',
+        [side]: -18,
+        top: '42%',
+        transform: 'translateY(-50%)',
+        width: 44,
+        height: 44,
+        borderRadius: '50%',
+        backgroundColor: 'var(--color-surface)',
+        border: '1px solid var(--color-border)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 10,
+        boxShadow: 'var(--shadow-sm)',
+        color: 'var(--color-text)',
+        opacity: enabled ? 1 : 0,
+        pointerEvents: enabled ? 'auto' : 'none',
+        transition: 'opacity 200ms ease',
+    });
 
     return (
-        <div style={{ padding: '4rem 0', backgroundColor: '#fff', position: 'relative' }}>
+        <section className="section" style={{ paddingBottom: '2.5rem' }}>
             <div className="container">
-                <div style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    alignItems: 'center', 
-                    marginBottom: '2.5rem',
-                    textAlign: 'center'
-                }}>
-                    {badgeText && (
-                        <span style={{ 
-                            backgroundColor: '#FEF3C7', 
-                            color: '#92400E', 
-                            padding: '4px 12px', 
-                            borderRadius: '20px', 
-                            fontSize: '0.75rem', 
-                            fontWeight: '700',
-                            marginBottom: '0.8rem'
-                        }}>
-                            {badgeText}
-                        </span>
-                    )}
-                    <h2 style={{ 
-                        fontSize: '2.2rem', 
-                        fontWeight: '800', 
-                        color: '#111827',
-                        fontFamily: "'Outfit', sans-serif"
-                    }}>
-                        {title}
-                    </h2>
-                </div>
+                <header style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '2rem', textAlign: 'center' }}>
+                    {badgeText && <span className="section-eyebrow">{badgeText}</span>}
+                    <h2 className="section-title" style={{ marginBottom: 0 }}>{title}</h2>
+                </header>
 
                 <div style={{ position: 'relative' }}>
-                    {/* Navigation Buttons */}
-                    <button 
-                        onClick={() => scroll('left')}
-                        style={{
-                            position: 'absolute',
-                            left: '-20px',
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            width: '45px',
-                            height: '45px',
-                            borderRadius: '50%',
-                            backgroundColor: '#fff',
-                            border: '1px solid #eee',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            zIndex: 10,
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                            color: '#333'
-                        }}
-                    >
-                        <ChevronLeft size={24} />
+                    {/* Hidden on small screens: the arrows sit outside the
+                        container and pushed the page 3px wider than the
+                        viewport, and touch users swipe the rail anyway. */}
+                    <button type="button" aria-label="Scroll left" className="rail-arrow" onClick={() => scroll('left')} style={arrowStyle('left', canScrollLeft)}>
+                        <ChevronLeft size={22} />
                     </button>
-                    
-                    <button 
-                        onClick={() => scroll('right')}
-                        style={{
-                            position: 'absolute',
-                            right: '-20px',
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            width: '45px',
-                            height: '45px',
-                            borderRadius: '50%',
-                            backgroundColor: '#fff',
-                            border: '1px solid #eee',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            zIndex: 10,
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                            color: '#333'
-                        }}
-                    >
-                        <ChevronRight size={24} />
+                    <button type="button" aria-label="Scroll right" className="rail-arrow" onClick={() => scroll('right')} style={arrowStyle('right', canScrollRight)}>
+                        <ChevronRight size={22} />
                     </button>
 
-                    <div 
+                    <div
                         ref={scrollRef}
-                        style={{ 
-                            display: 'flex', 
-                            gap: '24px', 
-                            overflowX: 'auto', 
-                            paddingBottom: '20px',
-                            msOverflowStyle: 'none',
-                            scrollbarWidth: 'none',
+                        className="no-scrollbar"
+                        style={{
+                            display: 'flex',
+                            gap: 24,
+                            overflowX: 'auto',
+                            paddingBottom: 16,
+                            scrollSnapType: 'x mandatory',
                             WebkitOverflowScrolling: 'touch',
-                            scrollSnapType: 'x mandatory'
                         }}
                     >
-                        {products.map(product => (
-                            <div key={product._id} style={{ minWidth: '320px', flexShrink: 0, scrollSnapAlign: 'start' }}>
-                                <ProductCard 
-                                    {...product} 
-                                    onAddToCart={handleAddToCart} 
-                                    onBuyNow={() => navigate(`/product/${product._id}`)}
-                                />
+                        {products.map((product) => (
+                            <div key={product._id} style={{ minWidth: 'min(300px, 78vw)', flexShrink: 0, scrollSnapAlign: 'start' }}>
+                                <ProductCard {...product} />
                             </div>
                         ))}
                     </div>
                 </div>
             </div>
-            <style>{`
-                div::-webkit-scrollbar { display: none; }
-            `}</style>
-        </div>
+        </section>
     );
 };
 

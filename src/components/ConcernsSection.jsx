@@ -1,124 +1,78 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import API_BASE from '../config';
+import { Link } from 'react-router-dom';
+import { api, imageUrl } from '../api/client';
 
 const ConcernsSection = () => {
     const [concerns, setConcerns] = useState([]);
     const [loading, setLoading] = useState(true);
-    const navigate = useNavigate();
 
     useEffect(() => {
-        const fetchConcerns = async () => {
-            try {
-                const response = await fetch(`${API_BASE}/api/concerns`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setConcerns(data);
-                }
-            } catch (error) {
-                console.error('Error fetching concerns:', error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchConcerns();
+        api.get('/api/concerns', { auth: false })
+            .then((data) => setConcerns(Array.isArray(data) ? data : []))
+            .catch(() => setConcerns([]))
+            .finally(() => setLoading(false));
     }, []);
 
     if (loading || concerns.length === 0) return null;
 
     return (
-        <div style={{ padding: '4rem 0', backgroundColor: '#fff' }}>
+        <section className="section" style={{ backgroundColor: 'var(--color-bg)' }}>
             <div className="container">
-                <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-                    <span style={{ 
-                        backgroundColor: '#FEF3C7', 
-                        color: '#92400E', 
-                        padding: '4px 16px', 
-                        borderRadius: '20px', 
-                        fontSize: '0.85rem', 
-                        fontWeight: '700',
-                        marginBottom: '1rem',
-                        display: 'inline-block'
-                    }}>
-                        Shop by Concern
-                    </span>
-                    <h2 style={{ 
-                        fontSize: '2.5rem', 
-                        fontWeight: '800', 
-                        color: '#111827',
-                        fontFamily: "'Outfit', sans-serif",
-                        marginTop: '0.5rem'
-                    }}>
-                        Which Mess Matters?
-                    </h2>
-                </div>
+                <header style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+                    <span className="section-eyebrow">Shop by concern</span>
+                    <h2 className="section-title" style={{ marginBottom: 0 }}>Which mess matters?</h2>
+                </header>
 
-                <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', 
-                    gap: '24px',
-                    justifyContent: 'center'
-                }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
                     {concerns.map((concern) => (
-                        <div 
-                            key={concern._id} 
-                            onClick={() => concern.linkUrl && navigate(concern.linkUrl)}
-                            style={{ 
-                                backgroundColor: '#f9f9f5', 
-                                borderRadius: '24px', 
-                                padding: '24px',
+                        <Link
+                            key={concern._id}
+                            // A concern with no link should still be a valid target
+                            // rather than a dead click that navigates to undefined.
+                            to={concern.linkUrl || '/shop'}
+                            className="concern-card"
+                            style={{
+                                backgroundColor: 'var(--color-surface-alt)',
+                                borderRadius: 'var(--radius-xl)',
+                                padding: 22,
                                 display: 'flex',
                                 justifyContent: 'space-between',
                                 alignItems: 'center',
-                                cursor: 'pointer',
-                                transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-                                border: '1px solid rgba(0,0,0,0.03)'
-                            }}
-                            onMouseOver={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-5px)';
-                                e.currentTarget.style.boxShadow = '0 10px 25px rgba(0,0,0,0.05)';
-                            }}
-                            onMouseOut={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = 'none';
+                                gap: 16,
+                                border: '1px solid var(--color-border)',
+                                transition: 'transform 250ms ease, box-shadow 250ms ease',
                             }}
                         >
-                            <div style={{ flex: 1 }}>
-                                <h3 style={{ 
-                                    fontSize: '1.5rem', 
-                                    fontWeight: '800', 
-                                    color: '#111827',
-                                    marginBottom: '12px',
-                                    lineHeight: '1.2'
-                                }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <h3 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: 10, lineHeight: 1.2 }}>
                                     {concern.title}
                                 </h3>
-                                <div style={{ 
-                                    display: 'flex', 
-                                    alignItems: 'center', 
-                                    gap: '4px',
-                                    color: '#111827',
-                                    fontSize: '0.9rem',
-                                    fontWeight: '600',
-                                    textDecoration: 'underline'
-                                }}>
-                                    View Products <span>›</span>
-                                </div>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)' }}>
+                                    View products <span aria-hidden="true">›</span>
+                                </span>
                             </div>
-                            
-                            <div style={{ width: '120px', height: '120px', flexShrink: 0 }}>
-                                <img 
-                                    src={concern.image} 
-                                    alt={concern.title} 
-                                    style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+
+                            {concern.image && (
+                                <img
+                                    src={imageUrl(concern.image)}
+                                    alt=""
+                                    loading="lazy"
+                                    decoding="async"
+                                    style={{ width: 112, height: 112, objectFit: 'contain', flexShrink: 0 }}
                                 />
-                            </div>
-                        </div>
+                            )}
+                        </Link>
                     ))}
                 </div>
             </div>
-        </div>
+
+            <style>{`
+                .concern-card:hover {
+                    transform: translateY(-5px);
+                    box-shadow: var(--shadow-md);
+                }
+            `}</style>
+        </section>
     );
 };
 

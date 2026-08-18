@@ -1,207 +1,198 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import API_BASE from '../config';
+import { api } from '../api/client';
+import { useApp } from '../context/AppContext';
+
+const SHOP_LINKS = [
+    ['Dishwash', '/shop?category=dishwash'],
+    ['Floor Cleaner', '/shop?category=Floor%20cleaner'],
+    ['HandCare', '/shop?category=handwash'],
+    ['Toilet Cleaner', '/shop?category=Toilet%20cleaner'],
+];
+
+const COMPANY_LINKS = [
+    ['Our Story', '/our-story'],
+    ['Ingredients', '/ingredients'],
+    ['Blog', '/blog'],
+    ['Wholesale', '/wholesale'],
+];
+
+const POLICY_LINKS = [
+    ['Terms of Service', '/policy/terms-of-service'],
+    ['Refund & Return Policy', '/policy/refund-policy'],
+    ['Privacy Policy', '/policy/privacy-policy'],
+];
 
 const Footer = () => {
-    const [isContactOpen, setIsContactOpen] = useState(false);
+    const { toast } = useApp();
+    const [isContactOpen, setContactOpen] = useState(false);
     const [contactForm, setContactForm] = useState({ name: '', email: '', subject: '', message: '' });
-    const [submitStatus, setSubmitStatus] = useState(null); // 'sending', 'success', 'error'
+    const [status, setStatus] = useState(null);
+    const [newsletterEmail, setNewsletterEmail] = useState('');
+    const [subscribing, setSubscribing] = useState(false);
 
     const handleContactSubmit = async (e) => {
         e.preventDefault();
-        setSubmitStatus('sending');
-
+        setStatus('sending');
         try {
-            const res = await fetch(`${API_BASE}/api/contact`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ...contactForm,
-                    label: 'Contact Request' // To identify in backend email
-                })
-            });
-
-            if (res.ok) {
-                setSubmitStatus('success');
-                setTimeout(() => {
-                    setIsContactOpen(false);
-                    setSubmitStatus(null);
-                    setContactForm({ name: '', email: '', subject: '', message: '' });
-                }, 3000);
-            } else {
-                setSubmitStatus('error');
-            }
-        } catch (error) {
-            console.error(error);
-            setSubmitStatus('error');
+            await api.post('/api/contact', { ...contactForm, label: 'Contact Request' }, { auth: false });
+            setStatus('success');
+            setTimeout(() => {
+                setContactOpen(false);
+                setStatus(null);
+                setContactForm({ name: '', email: '', subject: '', message: '' });
+            }, 2500);
+        } catch (err) {
+            setStatus('error');
+            toast(err.message || 'Message could not be sent.', 'error');
         }
     };
 
+    // The newsletter box used to be a decorative input wired to nothing.
+    // It now goes through the same contact endpoint so a signup actually lands.
+    const handleSubscribe = async (e) => {
+        e.preventDefault();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(newsletterEmail.trim())) {
+            toast('Please enter a valid email address.', 'error');
+            return;
+        }
+        setSubscribing(true);
+        try {
+            await api.post('/api/contact', {
+                name: 'Newsletter subscriber',
+                email: newsletterEmail.trim(),
+                subject: 'Newsletter signup',
+                message: `Please add ${newsletterEmail.trim()} to the newsletter list.`,
+                label: 'Newsletter',
+            }, { auth: false });
+            setNewsletterEmail('');
+            toast("You're on the list. Thanks!");
+        } catch (err) {
+            toast(err.message || 'Could not subscribe right now.', 'error');
+        } finally {
+            setSubscribing(false);
+        }
+    };
+
+    const linkStyle = { color: '#dbe3ee', transition: 'color 180ms' };
+
     return (
-        <footer style={{ backgroundColor: 'var(--color-primary)', color: 'white', padding: '4rem 0 2rem' }}>
+        <footer style={{ backgroundColor: '#101c4e', color: '#fff', padding: '4rem 0 2rem', marginTop: 'auto' }}>
             <div className="container">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '3rem', marginBottom: '3rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2.5rem', marginBottom: '3rem' }}>
                     <div>
-                        <h3 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <img src="/logo.png" alt="K'S JADU" style={{ height: '30px', filter: 'brightness(0) invert(1)' }} />
+                        <h3 style={{ fontSize: '1.35rem', marginBottom: '1.2rem', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <img src="/logo.png" alt="" width="30" height="30" style={{ height: 30, width: 'auto', filter: 'brightness(0) invert(1)' }} />
                             K'S JADU
                         </h3>
-                        <p style={{ color: '#a0b4cc', lineHeight: '1.7', fontSize: '0.9rem' }}>
-                            Specially formulated plant-based cleaning products that are safe for you and the planet.
+                        <p style={{ color: '#a0b4cc', lineHeight: 1.7, fontSize: '0.9rem' }}>
+                            Plant-based cleaning products that are safe for your family and kind to the planet.
                         </p>
                     </div>
 
-                    <div>
-                        <h4 style={{ marginBottom: '1.2rem', color: '#6CBF84' }}>Shop</h4>
-                        <ul style={{ color: '#e0e0e0', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                            <li>Laundry</li>
-                            <li>Dishwashing</li>
-                            <li>Surface Cleaners</li>
-                            <li>Bathroom Care</li>
-                        </ul>
-                    </div>
+                    {[['Shop', SHOP_LINKS], ['Company', COMPANY_LINKS], ['Policies', POLICY_LINKS]].map(([heading, links]) => (
+                        <nav key={heading} aria-label={heading}>
+                            <h4 style={{ marginBottom: '1.1rem', color: '#6cbf84', fontSize: '1rem' }}>{heading}</h4>
+                            <ul style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem', fontSize: '0.9rem' }}>
+                                {links.map(([label, to]) => (
+                                    <li key={label}>
+                                        {/* These were plain <li> text before, so none of them
+                                            were clickable despite looking like navigation. */}
+                                        <Link to={to} style={linkStyle} className="footer-link">{label}</Link>
+                                    </li>
+                                ))}
+                                {heading === 'Company' && (
+                                    <li>
+                                        <button type="button" onClick={() => setContactOpen(true)} style={{ ...linkStyle, fontSize: '0.9rem' }} className="footer-link">
+                                            Contact Us
+                                        </button>
+                                    </li>
+                                )}
+                            </ul>
+                        </nav>
+                    ))}
 
                     <div>
-                        <h4 style={{ marginBottom: '1.2rem', color: '#6CBF84' }}>Company</h4>
-                        <ul style={{ color: '#e0e0e0', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                            <li>Our Story</li>
-                            <li>Ingredients</li>
-                            <li>Blog</li>
-                            <li
-                                onClick={() => setIsContactOpen(true)}
-                                style={{ cursor: 'pointer', transition: 'color 0.3s' }}
-                                onMouseOver={(e) => e.target.style.color = '#6CBF84'}
-                                onMouseOut={(e) => e.target.style.color = '#e0e0e0'}
-                            >
-                                Contact Us
-                            </li>
-                        </ul>
-                    </div>
-
-                    <div>
-                        <h4 style={{ marginBottom: '1.2rem', color: '#6CBF84' }}>Policies</h4>
-                        <ul style={{ color: '#e0e0e0', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                            <li>
-                                <Link to="/policy/terms-of-service" style={{ color: 'inherit', textDecoration: 'none' }} onMouseOver={(e) => e.target.style.color = '#6CBF84'} onMouseOut={(e) => e.target.style.color = '#e0e0e0'}>Terms of Service</Link>
-                            </li>
-                            <li>
-                                <Link to="/policy/refund-policy" style={{ color: 'inherit', textDecoration: 'none' }} onMouseOver={(e) => e.target.style.color = '#6CBF84'} onMouseOut={(e) => e.target.style.color = '#e0e0e0'}>Refund & Return Policy</Link>
-                            </li>
-                            <li>
-                                <Link to="/policy/privacy-policy" style={{ color: 'inherit', textDecoration: 'none' }} onMouseOver={(e) => e.target.style.color = '#6CBF84'} onMouseOut={(e) => e.target.style.color = '#e0e0e0'}>Privacy Policy</Link>
-                            </li>
-                        </ul>
-                    </div>
-
-                    <div>
-                        <h4 style={{ marginBottom: '1.2rem', color: '#6CBF84' }}>Stay Clean</h4>
-                        <p style={{ marginBottom: '1rem', color: '#e0e0e0', fontSize: '0.9rem' }}>Subscribe to get special offers and once-in-a-lifetime deals.</p>
-                        <div style={{ display: 'flex' }}>
+                        <h4 style={{ marginBottom: '1.1rem', color: '#6cbf84', fontSize: '1rem' }}>Stay Clean</h4>
+                        <p style={{ marginBottom: '0.9rem', color: '#a0b4cc', fontSize: '0.9rem' }}>
+                            Subscribe for offers and new launches.
+                        </p>
+                        <form onSubmit={handleSubscribe} style={{ display: 'flex' }}>
                             <input
                                 type="email"
                                 placeholder="Enter your email"
-                                style={{
-                                    padding: '10px',
-                                    borderRadius: '4px 0 0 4px',
-                                    border: 'none',
-                                    width: '100%',
-                                    outline: 'none'
-                                }}
+                                aria-label="Email address for newsletter"
+                                value={newsletterEmail}
+                                onChange={(e) => setNewsletterEmail(e.target.value)}
+                                style={{ padding: 10, borderRadius: '8px 0 0 8px', border: 'none', width: '100%', minWidth: 0, outline: 'none' }}
                             />
-                            <button style={{
-                                backgroundColor: '#6CBF84',
-                                color: 'var(--color-primary)',
-                                padding: '10px 15px',
-                                borderRadius: '0 4px 4px 0',
-                                fontWeight: 'bold'
-                            }}>Subscribe</button>
-                        </div>
+                            <button
+                                type="submit"
+                                disabled={subscribing}
+                                style={{ backgroundColor: '#6cbf84', color: '#101c4e', padding: '10px 16px', borderRadius: '0 8px 8px 0', fontWeight: 700, whiteSpace: 'nowrap' }}
+                            >
+                                {subscribing ? '…' : 'Subscribe'}
+                            </button>
+                        </form>
                     </div>
                 </div>
 
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '2rem', textAlign: 'center', color: '#7ba1c7', fontSize: '0.85rem' }}>
-                    &copy; {new Date().getFullYear()} K'S JADU. All Rights Reserved.
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: '1.75rem', textAlign: 'center', color: '#7ba1c7', fontSize: '0.85rem' }}>
+                    © {new Date().getFullYear()} K'S JADU. All rights reserved.
                 </div>
             </div>
 
-            {/* Contact Us Modal */}
             {isContactOpen && (
-                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(5px)' }}>
-                    <div style={{ backgroundColor: 'white', padding: '2.5rem', borderRadius: '20px', width: '90%', maxWidth: '500px', boxShadow: '0 20px 50px rgba(0,0,0,0.3)', color: 'rgb(0, 0, 128)', position: 'relative' }}>
-                        <button
-                            onClick={() => setIsContactOpen(false)}
-                            style={{ position: 'absolute', top: '20px', right: '20px', border: 'none', backgroundColor: 'transparent', fontSize: '1.5rem', cursor: 'pointer', color: '#999' }}
-                        >&times;</button>
+                <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setContactOpen(false)}>
+                    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-heading" style={{ color: 'var(--color-text)' }}>
+                        <button type="button" className="modal__close" onClick={() => setContactOpen(false)} aria-label="Close">✕</button>
 
-                        <h2 style={{ marginBottom: '0.5rem', color: 'rgb(0, 0, 128)' }}>Contact Us</h2>
-                        <p style={{ marginBottom: '1.5rem', color: '#666', fontSize: '0.9rem' }}>Have a question? Drop us a message and we'll get back to you soon.</p>
-
-                        {submitStatus === 'success' ? (
+                        {status === 'success' ? (
                             <div style={{ textAlign: 'center', padding: '2rem 0' }}>
-                                <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>✅</div>
-                                <h3 style={{ color: '#28a745' }}>Message Sent!</h3>
-                                <p>Thank you for reaching out. We will contact you shortly.</p>
+                                <div style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>✅</div>
+                                <h3 style={{ color: 'var(--color-success)', fontSize: '1.4rem', fontWeight: 800 }}>Message sent</h3>
+                                <p style={{ color: 'var(--color-text-muted)', marginTop: 6 }}>We'll get back to you shortly.</p>
                             </div>
                         ) : (
-                            <form onSubmit={handleContactSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '5px' }}>Your Name</label>
-                                    <input
-                                        type="text" required placeholder="John Doe"
-                                        value={contactForm.name}
-                                        onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
-                                        style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px' }}
-                                    />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '5px' }}>Your Email</label>
-                                    <input
-                                        type="email" required placeholder="john@example.com"
-                                        value={contactForm.email}
-                                        onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
-                                        style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px' }}
-                                    />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '5px' }}>Subject</label>
-                                    <input
-                                        type="text" placeholder="Inquiry about product"
-                                        value={contactForm.subject}
-                                        onChange={(e) => setContactForm({ ...contactForm, subject: e.target.value })}
-                                        style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px' }}
-                                    />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '5px' }}>Message</label>
-                                    <textarea
-                                        required placeholder="Write your message here..."
-                                        rows="4"
-                                        value={contactForm.message}
-                                        onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
-                                        style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', resize: 'none' }}
-                                    ></textarea>
-                                </div>
+                            <>
+                                <h2 id="contact-heading" style={{ marginBottom: 6, fontSize: '1.5rem', fontWeight: 800 }}>Contact us</h2>
+                                <p style={{ marginBottom: '1.5rem', color: 'var(--color-text-muted)', fontSize: '0.92rem' }}>
+                                    Have a question? Drop us a message.
+                                </p>
 
-                                <button
-                                    type="submit"
-                                    disabled={submitStatus === 'sending'}
-                                    style={{
-                                        marginTop: '1rem', padding: '14px',
-                                        backgroundColor: 'rgb(0, 0, 128)', color: 'white',
-                                        border: 'none', borderRadius: '8px',
-                                        cursor: 'pointer', fontWeight: 'bold',
-                                        transition: 'background 0.3s',
-                                        opacity: submitStatus === 'sending' ? 0.7 : 1
-                                    }}
-                                >
-                                    {submitStatus === 'sending' ? 'Sending...' : 'Send Message'}
-                                </button>
-                                {submitStatus === 'error' && <p style={{ color: '#dc3545', fontSize: '0.85rem', textAlign: 'center' }}>Something went wrong. Please try again.</p>}
-                            </form>
+                                <form onSubmit={handleContactSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    <div className="field">
+                                        <label className="field__label" htmlFor="ct-name">Your name</label>
+                                        <input id="ct-name" className="input" required autoComplete="name" value={contactForm.name}
+                                            onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))} />
+                                    </div>
+                                    <div className="field">
+                                        <label className="field__label" htmlFor="ct-email">Your email</label>
+                                        <input id="ct-email" className="input" type="email" required autoComplete="email" value={contactForm.email}
+                                            onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))} />
+                                    </div>
+                                    <div className="field">
+                                        <label className="field__label" htmlFor="ct-subject">Subject</label>
+                                        <input id="ct-subject" className="input" value={contactForm.subject}
+                                            onChange={(e) => setContactForm((f) => ({ ...f, subject: e.target.value }))} />
+                                    </div>
+                                    <div className="field">
+                                        <label className="field__label" htmlFor="ct-message">Message</label>
+                                        <textarea id="ct-message" className="input" required rows={4} style={{ resize: 'vertical' }} value={contactForm.message}
+                                            onChange={(e) => setContactForm((f) => ({ ...f, message: e.target.value }))} />
+                                    </div>
+
+                                    <button type="submit" className="btn btn-primary btn-block" disabled={status === 'sending'} style={{ marginTop: 6 }}>
+                                        {status === 'sending' ? 'Sending…' : 'Send message'}
+                                    </button>
+                                </form>
+                            </>
                         )}
                     </div>
                 </div>
             )}
+
+            <style>{`.footer-link:hover { color: #6cbf84 !important; }`}</style>
         </footer>
     );
 };

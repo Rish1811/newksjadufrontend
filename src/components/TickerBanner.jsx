@@ -1,78 +1,73 @@
 import React, { useState, useEffect } from 'react';
-import API_BASE from '../config';
+import { api } from '../api/client';
+
+const BubbleIcon = () => (
+    <svg width="18" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ opacity: 0.85, flexShrink: 0 }}>
+        <circle cx="10" cy="14" r="4" stroke="currentColor" strokeWidth="1.8" />
+        <circle cx="18" cy="16" r="3" stroke="currentColor" strokeWidth="1.8" />
+        <circle cx="16" cy="8" r="5" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+);
 
 const TickerBanner = () => {
     const [announcements, setAnnouncements] = useState([]);
 
     useEffect(() => {
-        const fetchAnnouncements = async () => {
-            try {
-                const res = await fetch(`${API_BASE}/api/announcements`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setAnnouncements(data.filter(a => a.isActive));
-                }
-            } catch (error) {
-                console.error('Error fetching announcements:', error);
-            }
-        };
-        fetchAnnouncements();
+        api.get('/api/announcements', { auth: false })
+            .then((data) => setAnnouncements((Array.isArray(data) ? data : []).filter((a) => a.isActive)))
+            .catch(() => setAnnouncements([]));
     }, []);
 
     if (announcements.length === 0) return null;
 
-    const BubbleIcon = () => (
-        <svg width="20" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ opacity: 0.8 }}>
-            <circle cx="10" cy="14" r="4" stroke="white" strokeWidth="1.8"/>
-            <circle cx="18" cy="16" r="3" stroke="white" strokeWidth="1.8"/>
-            <circle cx="16" cy="8" r="5" stroke="white" strokeWidth="1.8"/>
-        </svg>
+    const item = (a, suffix = '') => (
+        <span
+            key={`${a._id}${suffix}`}
+            style={{ marginRight: 80, display: 'inline-flex', alignItems: 'center', gap: 14, letterSpacing: '0.5px' }}
+        >
+            <BubbleIcon />
+            {a.text}
+        </span>
     );
 
     return (
-        <div style={{
-            backgroundColor: '#8E59A6',
-            color: 'white',
-            padding: '10px 0',
-            overflow: 'hidden',
-            whiteSpace: 'nowrap',
-            position: 'relative',
-            fontSize: '1rem',
-            fontWeight: '500',
-            zIndex: 1000,
-            borderBottom: '1px solid rgba(255,255,255,0.1)'
-        }}>
-            <div className="marquee" style={{
-                display: 'inline-block',
-                paddingLeft: '100%',
-                animation: 'marquee 40s linear infinite'
-            }}>
-                {announcements.map((a, index) => (
-                    <span key={a._id} style={{ marginRight: '100px', display: 'inline-flex', alignItems: 'center', gap: '20px', letterSpacing: '0.8px', textTransform: 'capitalize' }}>
-                        <BubbleIcon />
-                        {a.text}
-                    </span>
-                ))}
-                {/* Duplicate for seamless loop */}
-                {announcements.map((a, index) => (
-                    <span key={`${a._id}-dup`} style={{ marginRight: '100px', display: 'inline-flex', alignItems: 'center', gap: '20px', letterSpacing: '0.8px', textTransform: 'capitalize' }}>
-                        <BubbleIcon />
-                        {a.text}
-                    </span>
-                ))}
+        <div
+            style={{
+                backgroundColor: '#8e59a6',
+                color: '#fff',
+                padding: '9px 0',
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                fontSize: '0.92rem',
+                fontWeight: 500,
+                position: 'relative',
+                zIndex: 1000,
+            }}
+        >
+            {/* aria-hidden: the marquee is decorative and unreadable to a
+                screen reader, so the same text is exposed statically below. */}
+            <div className="marquee" aria-hidden="true" style={{ display: 'inline-block', paddingLeft: '100%' }}>
+                {announcements.map((a) => item(a))}
+                {announcements.map((a) => item(a, '-dup'))}
             </div>
+
+            <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+                {announcements.map((a) => a.text).join('. ')}
+            </span>
+
             <style>{`
                 @keyframes marquee {
-                    0% { transform: translate(0, 0); }
-                    100% { transform: translate(-100%, 0); }
+                    from { transform: translateX(0); }
+                    to   { transform: translateX(-100%); }
                 }
-                .marquee {
-                    display: inline-block;
+                .marquee { animation: marquee 40s linear infinite; }
+                .marquee:hover { animation-play-state: paused; }
+                @media (prefers-reduced-motion: reduce) {
+                    .marquee { animation: none; padding-left: 0 !important; }
                 }
             `}</style>
         </div>
     );
 };
-
 
 export default TickerBanner;

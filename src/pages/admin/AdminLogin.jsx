@@ -1,102 +1,97 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import API_BASE from '../../config';
+import { useNavigate, Link } from 'react-router-dom';
+import { api } from '../../api/client';
 
 const AdminLogin = () => {
+    const navigate = useNavigate();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const navigate = useNavigate();
+    const [error, setError] = useState('');
+    const [submitting, setSubmitting] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        try {
-            const response = await fetch(`${API_BASE}/api/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
-            });
-            const data = await response.json();
+        setError('');
+        setSubmitting(true);
 
-            if (response.ok) {
-                if (data.isAdmin) {
-                    localStorage.setItem('adminUser', JSON.stringify(data));
-                    navigate('/admin/dashboard');
-                } else {
-                    alert('You are not authorized as an Admin');
-                }
-            } else {
-                alert(data.message || 'Login failed');
+        try {
+            const data = await api.post('/api/auth/login', { email, password }, { auth: false });
+
+            if (!data.isAdmin) {
+                // Same wording as a bad password, so this form can't be used to
+                // work out which accounts have admin rights.
+                setError('Invalid email or password.');
+                return;
             }
-        } catch (error) {
-            console.error(error);
-            alert('Error connecting to server');
+
+            localStorage.setItem('adminUser', JSON.stringify(data));
+            navigate('/admin/dashboard', { replace: true });
+        } catch (err) {
+            setError(err.message || 'Could not sign in.');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     return (
-        <div style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            height: '100vh',
-            backgroundColor: 'rgb(0, 0, 128)' // Navy brand color
-        }}>
-            <div style={{
-                backgroundColor: 'white',
-                padding: '3rem',
-                borderRadius: '15px',
-                boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
-                width: '100%',
-                maxWidth: '400px',
-                textAlign: 'center'
-            }}>
-                <img src="/logo.png" alt="Admin" style={{ height: '60px', marginBottom: '1.5rem' }} />
-                <h2 style={{ color: '#333', marginBottom: '2rem' }}>Owner Administration</h2>
+        <div style={{ display: 'grid', placeItems: 'center', minHeight: '100dvh', backgroundColor: '#101c4e', padding: 20 }}>
+            <div
+                style={{
+                    backgroundColor: '#fff',
+                    padding: 'clamp(24px, 5vw, 44px)',
+                    borderRadius: 18,
+                    boxShadow: '0 20px 45px rgba(0,0,0,0.25)',
+                    width: '100%',
+                    maxWidth: 400,
+                    textAlign: 'center',
+                    color: '#14161a',
+                }}
+            >
+                <img src="/logo.png" alt="" width="56" height="56" style={{ height: 56, width: 'auto', marginBottom: '1.25rem' }} />
+                <h1 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: 6 }}>Owner Administration</h1>
+                <p style={{ color: '#5b6472', fontSize: '0.9rem', marginBottom: '1.75rem' }}>Sign in to manage the store.</p>
 
-                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                    <input
-                        type="email"
-                        placeholder="Admin Email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        required
-                        style={{
-                            padding: '12px 15px',
-                            borderRadius: '8px',
-                            border: '1px solid #ddd',
-                            fontSize: '1rem'
-                        }}
-                    />
-                    <input
-                        type="password"
-                        placeholder="Password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        required
-                        style={{
-                            padding: '12px 15px',
-                            borderRadius: '8px',
-                            border: '1px solid #ddd',
-                            fontSize: '1rem'
-                        }}
-                    />
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', textAlign: 'left' }}>
+                    <div className="field">
+                        <label className="field__label" htmlFor="admin-email" style={{ color: '#5b6472' }}>Admin email</label>
+                        <input
+                            id="admin-email" className="input" type="email" required autoComplete="username"
+                            value={email} onChange={(e) => setEmail(e.target.value)}
+                            style={{ background: '#fff', color: '#14161a', borderColor: '#e3e6ec' }}
+                        />
+                    </div>
+
+                    <div className="field">
+                        <label className="field__label" htmlFor="admin-password" style={{ color: '#5b6472' }}>Password</label>
+                        <input
+                            id="admin-password" className="input" type="password" required autoComplete="current-password"
+                            value={password} onChange={(e) => setPassword(e.target.value)}
+                            style={{ background: '#fff', color: '#14161a', borderColor: '#e3e6ec' }}
+                        />
+                    </div>
+
+                    {error && (
+                        <p role="alert" style={{ color: '#b02a37', fontSize: '0.85rem', fontWeight: 600, margin: 0 }}>
+                            {error}
+                        </p>
+                    )}
+
                     <button
                         type="submit"
+                        disabled={submitting}
                         style={{
-                            backgroundColor: '#4A90E2', // Secondary brand color
-                            color: 'white',
-                            padding: '12px',
-                            borderRadius: '8px',
-                            border: 'none',
-                            fontSize: '1.1rem',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            transition: 'background 0.3s'
+                            backgroundColor: '#101c4e', color: '#fff', padding: 13,
+                            borderRadius: 10, fontSize: '1rem', fontWeight: 700, marginTop: 6,
+                            opacity: submitting ? 0.7 : 1,
                         }}
                     >
-                        Access Dashboard
+                        {submitting ? 'Signing in…' : 'Access dashboard'}
                     </button>
                 </form>
+
+                <Link to="/" style={{ display: 'inline-block', marginTop: '1.5rem', fontSize: '0.85rem', color: '#5b6472' }}>
+                    ← Back to store
+                </Link>
             </div>
         </div>
     );

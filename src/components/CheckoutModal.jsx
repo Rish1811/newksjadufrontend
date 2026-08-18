@@ -1,351 +1,332 @@
-import React, { useState, useEffect } from 'react';
-import API_BASE from '../config';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api, imageUrl, formatPrice, invalidateCache } from '../api/client';
+import { useApp } from '../context/AppContext';
 import { loadRazorpayScript } from '../utils/razorpay';
 
-const CheckoutModal = ({ isOpen, onClose, cartItems, totalPrice, user }) => {
-    const [shippingAddress, setShippingAddress] = useState({ 
-        address: '', 
-        city: '', 
-        postalCode: '', 
-        phone: '' 
-    });
-    const [orderStatus, setOrderStatus] = useState(null);
+const EMPTY_ADDRESS = { fullName: '', address: '', city: '', postalCode: '', phone: '' };
+const ADDRESS_KEY = 'lastShippingAddress';
+
+/** Mirrors the server-side rules in routes/orders.js so the user is told what
+ *  is wrong before a round trip, not after. */
+const validate = ({ address, city, postalCode, phone }) => {
+    const errors = {};
+    if (!address.trim()) errors.address = 'Street address is required.';
+    if (!city.trim()) errors.city = 'City is required.';
+    if (!/^\d{6}$/.test(postalCode.trim())) errors.postalCode = 'Enter a 6-digit PIN code.';
+    if (!/^[6-9]\d{9}$/.test(phone.replace(/\D/g, ''))) errors.phone = 'Enter a valid 10-digit mobile number.';
+    return errors;
+};
+
+const CheckoutModal = () => {
+    const navigate = useNavigate();
+    const { user, cartItems, cartSummary, clearCart, refreshCart, toast } = useApp();
+
+    const [isOpen, setOpen] = useState(false);
+    const [shippingAddress, setShippingAddress] = useState(EMPTY_ADDRESS);
+    const [errors, setErrors] = useState({});
     const [paymentConfig, setPaymentConfig] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [placedOrder, setPlacedOrder] = useState(null);
 
     useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const res = await fetch(`${API_BASE}/api/payment_settings/config`);
-                if (res.ok) setPaymentConfig(await res.json());
-            } catch (err) { console.error('Config fetch error:', err); }
-        };
-        if (isOpen) fetchConfig();
+        const open = () => setOpen(true);
+        window.addEventListener('openCheckout', open);
+        return () => window.removeEventListener('openCheckout', open);
+    }, []);
+
+    // Remember the last address used so repeat customers don't retype it.
+    useEffect(() => {
+        if (!isOpen) return;
+        try {
+            const saved = localStorage.getItem(ADDRESS_KEY);
+            if (saved) setShippingAddress({ ...EMPTY_ADDRESS, ...JSON.parse(saved) });
+        } catch { /* ignore malformed storage */ }
+
+        api.get('/api/payment_settings/config', { auth: false })
+            .then(setPaymentConfig)
+            .catch(() => setPaymentConfig(null));
     }, [isOpen]);
 
-    const handlePlaceOrder = async (e, method = 'cod') => {
-        if (e) e.preventDefault();
-        setLoading(true);
+    useEffect(() => {
+        if (!isOpen) return;
+        const previous = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = previous; };
+    }, [isOpen]);
 
-        const orderItems = cartItems.map(item => ({
-            name: item.name,
-            qty: item.qty,
-            image: item.image,
-            price: item.price,
-            product: item.product
-        }));
+    const close = useCallback(() => {
+        setOpen(false);
+        setErrors({});
+        setPlacedOrder(null);
+        setLoading(false);
+    }, []);
 
-        const orderData = {
-            orderItems,
-            shippingAddress,
-            totalPrice,
-            paymentMethod: method
-        };
-
-        try {
-            const res = await fetch(`${API_BASE}/api/orders`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${user.token}`
-                },
-                body: JSON.stringify(orderData)
-            });
-
-            if (res.ok) {
-                const createdOrder = await res.json();
-
-                if (method === 'online' && paymentConfig?.isEnabled) {
-                    const scriptLoaded = await loadRazorpayScript();
-                    if (!scriptLoaded) {
-                        alert('Razorpay SDK failed to load. Are you online?');
-                        setLoading(false);
-                        return;
-                    }
-
-                    const rpRes = await fetch(`${API_BASE}/api/razorpay/create-order`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ amount: orderData.totalPrice, receipt: createdOrder._id })
-                    });
-
-                    if (!rpRes.ok) throw new Error('Razorpay order creation failed');
-                    const rpOrder = await rpRes.json();
-
-                    const options = {
-                        key: paymentConfig.keyId,
-                        amount: rpOrder.amount,
-                        currency: rpOrder.currency,
-                        name: "K'S JADU",
-                        description: "Order #" + createdOrder._id.slice(-6),
-                        image: "/logo.png",
-                        order_id: rpOrder.id,
-                        handler: async (response) => {
-                            const verifyRes = await fetch(`${API_BASE}/api/razorpay/verify`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ ...response, database_order_id: createdOrder._id })
-                            });
-                            if (verifyRes.ok) {
-                                setOrderStatus('success');
-                                finalizeOrder();
-                            } else {
-                                setOrderStatus('error');
-                            }
-                        },
-                        prefill: { name: user.name, email: user.email, contact: shippingAddress.phone },
-                        theme: { color: "rgb(0, 0, 128)" }
-                    };
-
-                    const rzp = new window.Razorpay(options);
-                    rzp.open();
-                } else {
-                    setOrderStatus('success');
-                    finalizeOrder();
-                }
-            } else {
-                setOrderStatus('error');
-            }
-        } catch (error) {
-            console.error(error);
-            setOrderStatus('error');
-        } finally {
-            setLoading(false);
-        }
+    const setField = (key, value) => {
+        setShippingAddress((a) => ({ ...a, [key]: value }));
+        setErrors((e) => (e[key] ? { ...e, [key]: undefined } : e));
     };
 
-    const finalizeOrder = async () => {
-        // Clear cart
-        await fetch(`${API_BASE}/api/cart`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${user.token}` }
-        });
-        window.dispatchEvent(new Event('cartUpdated'));
-        
-        setTimeout(() => {
-            onClose();
-            setOrderStatus(null);
-            setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
-            window.location.reload();
-        }, 3000);
+    const finishSuccessfully = (order) => {
+        clearCart();
+        invalidateCache('/api/orders', '/api/products');
+        setPlacedOrder(order);
+        setLoading(false);
+    };
+
+    const handlePlaceOrder = async (method) => {
+        if (!user) {
+            close();
+            navigate('/login?redirect=cart');
+            return;
+        }
+        if (cartItems.length === 0) {
+            toast('Your cart is empty.', 'error');
+            return;
+        }
+
+        // Both buttons validate. The old "Pay Online" button was type="button",
+        // so it skipped the form's own required-field checks entirely.
+        const validationErrors = validate(shippingAddress);
+        if (Object.keys(validationErrors).length > 0) {
+            setErrors(validationErrors);
+            toast('Please correct the highlighted fields.', 'error');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            localStorage.setItem(ADDRESS_KEY, JSON.stringify(shippingAddress));
+
+            // The server re-prices every line from the database, so the totals
+            // shown here are advisory only and cannot be tampered with.
+            const order = await api.post('/api/orders', {
+                orderItems: cartItems.map((i) => ({ product: i.product, qty: i.qty, size: i.size })),
+                shippingAddress,
+                paymentMethod: method,
+            });
+
+            if (method === 'cod') {
+                finishSuccessfully(order);
+                return;
+            }
+
+            const scriptLoaded = await loadRazorpayScript();
+            if (!scriptLoaded) {
+                toast('Could not load the payment window. Please try Cash on Delivery.', 'error');
+                setLoading(false);
+                return;
+            }
+
+            // Amount comes from our own order record on the server side.
+            const rpOrder = await api.post('/api/razorpay/create-order', { orderId: order._id });
+
+            const rzp = new window.Razorpay({
+                key: paymentConfig.keyId,
+                amount: rpOrder.amount,
+                currency: rpOrder.currency,
+                name: "K'S JADU",
+                description: `Order ${order.orderNumber || ''}`.trim(),
+                image: '/logo.png',
+                order_id: rpOrder.id,
+                handler: async (response) => {
+                    try {
+                        const result = await api.post('/api/razorpay/verify', {
+                            razorpay_order_id: response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature: response.razorpay_signature,
+                            orderId: order._id,
+                        });
+                        finishSuccessfully(result.order || order);
+                    } catch (err) {
+                        toast(err.message || 'Payment could not be verified.', 'error');
+                        setLoading(false);
+                    }
+                },
+                modal: {
+                    // Closing the payment window must not leave the UI stuck on
+                    // "Processing..." forever.
+                    ondismiss: () => {
+                        setLoading(false);
+                        refreshCart();
+                        toast('Payment cancelled. Your order is awaiting payment.', 'info');
+                    },
+                },
+                prefill: { name: user.name, email: user.email, contact: shippingAddress.phone },
+                theme: { color: '#101c4e' },
+            });
+
+            rzp.on('payment.failed', (resp) => {
+                toast(resp?.error?.description || 'Payment failed.', 'error');
+                setLoading(false);
+            });
+
+            rzp.open();
+        } catch (err) {
+            toast(err.message || 'We could not place your order.', 'error');
+            setLoading(false);
+            // A stock rejection means the cart is stale; resync it.
+            if (err.status === 409) refreshCart();
+        }
     };
 
     if (!isOpen) return null;
 
     return (
-        <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            backgroundColor: 'rgba(0,0,0,0.7)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 2000,
-            padding: '20px'
-        }}>
-            <div style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                borderRadius: '32px',
-                width: '100%',
-                maxWidth: '500px',
-                padding: '2.5rem',
-                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-                position: 'relative',
-                maxHeight: '90vh',
-                overflowY: 'auto'
-            }}>
-                <button 
-                    onClick={onClose}
-                    style={{
-                        position: 'absolute',
-                        top: '20px',
-                        right: '20px',
-                        background: '#f3f4f6',
-                        border: 'none',
-                        width: '36px',
-                        height: '36px',
-                        borderRadius: '50%',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        fontSize: '18px',
-                        color: '#6b7280'
-                    }}
-                >✕</button>
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !loading && close()}>
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="checkout-heading">
+                <button type="button" className="modal__close" onClick={close} aria-label="Close checkout">✕</button>
 
-                {orderStatus === 'success' ? (
-                    <div style={{ textAlign: 'center', padding: '2rem 0' }}>
-                        <div style={{ fontSize: '5rem', marginBottom: '1rem' }}>🎉</div>
-                        <h2 style={{ color: '#059669', fontSize: '2rem', fontWeight: '800', marginBottom: '0.5rem' }}>Order Placed!</h2>
-                        <p style={{ color: '#4b5563', fontSize: '1.1rem' }}>Your order has been received successfully. Redirecting you shortly...</p>
+                {placedOrder ? (
+                    <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
+                        <div style={{ fontSize: '4rem', marginBottom: '0.5rem' }}>🎉</div>
+                        <h2 id="checkout-heading" style={{ color: 'var(--color-success)', fontSize: '1.75rem', fontWeight: 800, marginBottom: '0.5rem' }}>
+                            Order placed
+                        </h2>
+                        <p style={{ color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>
+                            Order <strong>{placedOrder.orderNumber || `#${String(placedOrder._id).slice(-8)}`}</strong>
+                        </p>
+                        <p style={{ color: 'var(--color-text-muted)', marginBottom: '1.75rem' }}>
+                            {placedOrder.paymentMethod === 'cod'
+                                ? 'Pay in cash when it arrives.'
+                                : 'Payment received. Thank you.'}
+                        </p>
+                        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+                            <button type="button" className="btn btn-primary" onClick={() => { close(); navigate('/my-orders'); }}>
+                                Track my order
+                            </button>
+                            <button type="button" className="btn btn-outline" onClick={() => { close(); navigate('/shop'); }}>
+                                Continue shopping
+                            </button>
+                        </div>
                     </div>
                 ) : (
                     <>
-                        <div style={{ marginBottom: '2rem' }}>
-                            <h2 style={{ fontSize: '1.8rem', fontWeight: '800', color: '#111827', margin: '0 0 8px 0' }}>Checkout Details</h2>
-                            <p style={{ color: '#6b7280', margin: 0 }}>Please provide your shipping information</p>
-                        </div>
+                        <header style={{ marginBottom: '1.5rem' }}>
+                            <h2 id="checkout-heading" style={{ fontSize: '1.6rem', fontWeight: 800, marginBottom: 6 }}>Checkout</h2>
+                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem' }}>Where should we deliver this?</p>
+                        </header>
 
-                        {/* Order Summary Mini */}
-                        <div style={{ 
-                            backgroundColor: '#f9fafb', 
-                            borderRadius: '20px', 
-                            padding: '1.5rem', 
-                            marginBottom: '2rem',
-                            border: '1px solid #e5e7eb'
-                        }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                                <span style={{ color: '#6b7280', fontWeight: '500' }}>Items ({cartItems.length})</span>
-                                <span style={{ color: '#111827', fontWeight: '700' }}>₹{totalPrice}</span>
+                        <section
+                            style={{
+                                backgroundColor: 'var(--color-surface-alt)',
+                                borderRadius: 'var(--radius-lg)',
+                                padding: '1.1rem',
+                                marginBottom: '1.5rem',
+                                border: '1px solid var(--color-border)',
+                            }}
+                        >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10, maxHeight: 150, overflowY: 'auto' }}>
+                                {cartItems.map((item) => (
+                                    <div key={`${item.product}-${item.size || ''}`} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.88rem' }}>
+                                        <img
+                                            src={imageUrl(item.image)}
+                                            alt=""
+                                            loading="lazy"
+                                            style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover', background: 'var(--color-surface)', flexShrink: 0 }}
+                                        />
+                                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {item.name}{item.size ? ` · ${item.size}` : ''} × {item.qty}
+                                        </span>
+                                        <span style={{ fontWeight: 600 }}>{formatPrice(item.price * item.qty)}</span>
+                                    </div>
+                                ))}
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px dashed #d1d5db' }}>
-                                <span style={{ color: '#111827', fontWeight: '800' }}>Grand Total</span>
-                                <span style={{ color: '#111827', fontWeight: '800', fontSize: '1.2rem' }}>₹{totalPrice}</span>
-                            </div>
-                        </div>
 
-                        <form onSubmit={(e) => handlePlaceOrder(e, 'cod')} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-                            <div style={{ position: 'relative' }}>
-                                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '700', color: '#374151', marginBottom: '6px', marginLeft: '4px' }}>Street Address</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="Enter your flat/house no. and street" 
-                                    required 
-                                    value={shippingAddress.address} 
-                                    onChange={(e) => setShippingAddress({ ...shippingAddress, address: e.target.value })} 
-                                    style={{ 
-                                        width: '100%', 
-                                        padding: '14px 18px', 
-                                        borderRadius: '16px', 
-                                        border: '2px solid #e5e7eb',
-                                        fontSize: '1rem',
-                                        outline: 'none',
-                                        transition: 'all 0.2s'
-                                    }} 
-                                    onFocus={(e) => e.target.style.borderColor = '#000'}
-                                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.88rem', color: 'var(--color-text-muted)', paddingTop: 10, borderTop: '1px dashed var(--color-border)' }}>
+                                <span>Delivery</span>
+                                <span style={{ color: cartSummary.shipping === 0 ? 'var(--color-accent)' : 'inherit', fontWeight: 600 }}>
+                                    {cartSummary.shipping === 0 ? 'FREE' : formatPrice(cartSummary.shipping)}
+                                </span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontWeight: 800, fontSize: '1.1rem' }}>
+                                <span>Total</span><span>{formatPrice(cartSummary.total)}</span>
+                            </div>
+                        </section>
+
+                        <form
+                            onSubmit={(e) => { e.preventDefault(); handlePlaceOrder('cod'); }}
+                            noValidate
+                            style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+                        >
+                            <div className="field">
+                                <label className="field__label" htmlFor="co-name">Full name</label>
+                                <input
+                                    id="co-name" className="input" autoComplete="name"
+                                    placeholder={user?.name || 'Your name'}
+                                    value={shippingAddress.fullName}
+                                    onChange={(e) => setField('fullName', e.target.value)}
                                 />
+                            </div>
+
+                            <div className="field">
+                                <label className="field__label" htmlFor="co-address">Street address</label>
+                                <input
+                                    id="co-address" className="input" autoComplete="street-address"
+                                    placeholder="Flat / house no. and street"
+                                    aria-invalid={Boolean(errors.address)}
+                                    value={shippingAddress.address}
+                                    onChange={(e) => setField('address', e.target.value)}
+                                />
+                                {errors.address && <span className="field__error">{errors.address}</span>}
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '700', color: '#374151', marginBottom: '6px', marginLeft: '4px' }}>City</label>
-                                    <input 
-                                        type="text" 
-                                        placeholder="City" 
-                                        required 
-                                        value={shippingAddress.city} 
-                                        onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })} 
-                                        style={{ 
-                                            width: '100%', 
-                                            padding: '14px 18px', 
-                                            borderRadius: '16px', 
-                                            border: '2px solid #e5e7eb',
-                                            fontSize: '1rem',
-                                            outline: 'none'
-                                        }} 
-                                        onFocus={(e) => e.target.style.borderColor = '#000'}
-                                        onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                                <div className="field">
+                                    <label className="field__label" htmlFor="co-city">City</label>
+                                    <input
+                                        id="co-city" className="input" autoComplete="address-level2" placeholder="City"
+                                        aria-invalid={Boolean(errors.city)}
+                                        value={shippingAddress.city}
+                                        onChange={(e) => setField('city', e.target.value)}
                                     />
+                                    {errors.city && <span className="field__error">{errors.city}</span>}
                                 </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '700', color: '#374151', marginBottom: '6px', marginLeft: '4px' }}>PIN Code</label>
-                                    <input 
-                                        type="text" 
-                                        placeholder="6 digits" 
-                                        required 
-                                        maxLength="6"
-                                        value={shippingAddress.postalCode} 
-                                        onChange={(e) => setShippingAddress({ ...shippingAddress, postalCode: e.target.value })} 
-                                        style={{ 
-                                            width: '100%', 
-                                            padding: '14px 18px', 
-                                            borderRadius: '16px', 
-                                            border: '2px solid #e5e7eb',
-                                            fontSize: '1rem',
-                                            outline: 'none'
-                                        }} 
-                                        onFocus={(e) => e.target.style.borderColor = '#000'}
-                                        onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                                <div className="field">
+                                    <label className="field__label" htmlFor="co-pin">PIN code</label>
+                                    <input
+                                        id="co-pin" className="input" inputMode="numeric" maxLength={6}
+                                        autoComplete="postal-code" placeholder="6 digits"
+                                        aria-invalid={Boolean(errors.postalCode)}
+                                        value={shippingAddress.postalCode}
+                                        onChange={(e) => setField('postalCode', e.target.value.replace(/\D/g, ''))}
                                     />
+                                    {errors.postalCode && <span className="field__error">{errors.postalCode}</span>}
                                 </div>
                             </div>
 
-                            <div>
-                                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '700', color: '#374151', marginBottom: '6px', marginLeft: '4px' }}>Phone Number</label>
-                                <input 
-                                    type="tel" 
-                                    placeholder="10-digit mobile number" 
-                                    required 
-                                    maxLength="10"
-                                    value={shippingAddress.phone} 
-                                    onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })} 
-                                    style={{ 
-                                        width: '100%', 
-                                        padding: '14px 18px', 
-                                        borderRadius: '16px', 
-                                        border: '2px solid #e5e7eb',
-                                        fontSize: '1rem',
-                                        outline: 'none'
-                                    }} 
-                                    onFocus={(e) => e.target.style.borderColor = '#000'}
-                                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                            <div className="field">
+                                <label className="field__label" htmlFor="co-phone">Phone number</label>
+                                <input
+                                    id="co-phone" className="input" type="tel" inputMode="numeric" maxLength={10}
+                                    autoComplete="tel" placeholder="10-digit mobile number"
+                                    aria-invalid={Boolean(errors.phone)}
+                                    value={shippingAddress.phone}
+                                    onChange={(e) => setField('phone', e.target.value.replace(/\D/g, ''))}
                                 />
+                                {errors.phone && <span className="field__error">{errors.phone}</span>}
                             </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '1.5rem' }}>
-                                <button 
-                                    type="submit" 
-                                    disabled={loading}
-                                    style={{ 
-                                        width: '100%', 
-                                        padding: '18px', 
-                                        backgroundColor: '#000', 
-                                        color: 'white', 
-                                        border: 'none', 
-                                        borderRadius: '20px', 
-                                        cursor: loading ? 'not-allowed' : 'pointer', 
-                                        fontWeight: '800', 
-                                        fontSize: '1.1rem',
-                                        transition: 'transform 0.2s',
-                                        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'
-                                    }}
-                                    onMouseEnter={(e) => !loading && (e.currentTarget.style.transform = 'scale(1.02)')}
-                                    onMouseLeave={(e) => !loading && (e.currentTarget.style.transform = 'scale(1)')}
-                                >
-                                    {loading ? 'Processing...' : 'Confirm Cash on Delivery'}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: '0.5rem' }}>
+                                <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={loading}>
+                                    {loading ? 'Processing…' : `Place order · ${formatPrice(cartSummary.total)}`}
                                 </button>
-                                
-                                {paymentConfig?.isEnabled && (
-                                    <button 
-                                        type="button" 
+
+                                {paymentConfig?.isEnabled && paymentConfig?.keyId && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline btn-block btn-lg"
                                         disabled={loading}
-                                        onClick={(e) => handlePlaceOrder(null, 'online')} 
-                                        style={{ 
-                                            width: '100%', 
-                                            padding: '18px', 
-                                            backgroundColor: '#fff', 
-                                            color: '#000', 
-                                            border: '2px solid #000', 
-                                            borderRadius: '20px', 
-                                            cursor: loading ? 'not-allowed' : 'pointer', 
-                                            fontWeight: '800', 
-                                            fontSize: '1.1rem',
-                                            display: 'flex',
-                                            justifyContent: 'center',
-                                            alignItems: 'center',
-                                            gap: '10px'
-                                        }}
+                                        onClick={() => handlePlaceOrder('online')}
                                     >
-                                        <span style={{ fontSize: '1.2rem' }}>💳</span> Pay Securely Online
+                                        💳 Pay securely online
                                     </button>
                                 )}
                             </div>
+
+                            <p style={{ fontSize: '0.78rem', color: 'var(--color-text-faint)', textAlign: 'center' }}>
+                                Cash on delivery available. Your details are only used for this delivery.
+                            </p>
                         </form>
                     </>
                 )}

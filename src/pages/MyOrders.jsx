@@ -1,526 +1,342 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import API_BASE from '../config';
-import { loadRazorpayScript } from '../utils/razorpay';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { api, imageUrl, formatPrice, invalidateCache } from '../api/client';
+import { useApp } from '../context/AppContext';
+import Skeleton from '../components/Skeleton';
+
+const STATUS_STYLE = {
+    Pending: 'badge--warning',
+    Accepted: 'badge--success',
+    Shipped: 'badge--info',
+    Delivered: 'badge--neutral',
+    Rejected: 'badge--danger',
+    Cancelled: 'badge--danger',
+};
+
+const STATUS_STEPS = ['Pending', 'Accepted', 'Shipped', 'Delivered'];
 
 const MyOrders = () => {
+    const navigate = useNavigate();
+    const { user, toast, addToCart } = useApp();
+
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [cartItems, setCartItems] = useState([]);
-    const [showCheckout, setShowCheckout] = useState(false);
-    const [isCartCheckout, setIsCartCheckout] = useState(false);
-    const [selectedProduct, setSelectedProduct] = useState(null);
-    const [selectedQty, setSelectedQty] = useState(1);
-    const [shippingAddress, setShippingAddress] = useState({ address: '', city: '', postalCode: '', phone: '' });
-    const [orderStatus, setOrderStatus] = useState(null);
-    const [paymentConfig, setPaymentConfig] = useState(null);
-    const [reviewModal, setReviewModal] = useState({ open: false, product: null });
-    const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '', title: '', images: null });
-    const navigate = useNavigate();
-    const user = JSON.parse(localStorage.getItem('user'));
+    const [error, setError] = useState(null);
+    const [busyOrderId, setBusyOrderId] = useState(null);
+    const [reviewModal, setReviewModal] = useState({ open: false, item: null });
+    const [reviewForm, setReviewForm] = useState({ rating: 5, title: '', comment: '', images: null });
+    const [submittingReview, setSubmittingReview] = useState(false);
 
-    const fetchCart = async () => {
-        if (!user) return;
+    const loadOrders = useCallback(async () => {
+        setLoading(true);
+        setError(null);
         try {
-            const response = await fetch(`${API_BASE}/api/cart`, {
-                headers: { Authorization: `Bearer ${user.token}` }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setCartItems(data);
-            }
-        } catch (error) {
-            console.error('Error fetching cart:', error);
+            const data = await api.get('/api/orders/myorders', { fresh: true });
+            setOrders(Array.isArray(data?.orders) ? data.orders : []);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
         if (!user) {
-            navigate('/login');
+            navigate('/login?redirect=orders', { replace: true });
             return;
         }
+        loadOrders();
+    }, [user, navigate, loadOrders]);
 
-        const fetchOrders = async () => {
-            try {
-                const response = await fetch(`${API_BASE}/api/orders/myorders`, {
-                    headers: { Authorization: `Bearer ${user.token}` }
-                });
-                const data = await response.json();
-                setOrders(data);
-                setLoading(false);
-            } catch (error) {
-                console.error('Error fetching orders:', error);
-                setLoading(false);
-            }
-        };
-
-        const fetchConfig = async () => {
-            try {
-                const res = await fetch(`${API_BASE}/api/payment_settings/config`);
-                if (res.ok) setPaymentConfig(await res.json());
-            } catch (err) { console.error('Config fetch error:', err); }
-        };
-
-        fetchOrders();
-        fetchCart();
-        fetchConfig();
-
-        window.addEventListener('cartUpdated', fetchCart);
-        return () => window.removeEventListener('cartUpdated', fetchCart);
-    }, [navigate, user]);
-
-    const handleBuyNowItem = (item) => {
-        setSelectedProduct({
-            _id: item.product,
-            name: item.name,
-            price: item.price,
-            image: item.image
-        });
-        setSelectedQty(item.qty);
-        setIsCartCheckout(false);
-        setShowCheckout(true);
-    };
-
-    const handleBuyNowCart = () => {
-        if (cartItems.length === 0) return;
-        setIsCartCheckout(true);
-        setShowCheckout(true);
-    };
-
-    const removeFromCart = async (productId) => {
+    const handleCancel = async (order) => {
+        if (!window.confirm(`Cancel order ${order.orderNumber}? This cannot be undone.`)) return;
+        setBusyOrderId(order._id);
         try {
-            const res = await fetch(`${API_BASE}/api/cart/${productId}`, {
-                method: 'DELETE',
-                headers: { Authorization: `Bearer ${user.token}` }
-            });
-            if (res.ok) {
-                fetchCart();
-            }
-        } catch (error) {
-            console.error('Error removing from cart:', error);
+            await api.put(`/api/orders/${order._id}/cancel`);
+            invalidateCache('/api/orders', '/api/products');
+            toast('Order cancelled.');
+            await loadOrders();
+        } catch (err) {
+            toast(err.message, 'error');
+        } finally {
+            setBusyOrderId(null);
         }
     };
 
-    const handlePlaceOrder = async (e, method = 'cod') => {
-        if (e) e.preventDefault();
-
-        let orderItems = [];
-        let totalPrice = 0;
-
-        if (isCartCheckout) {
-            orderItems = cartItems.map(item => ({
-                name: item.name,
-                qty: item.qty,
-                image: item.image,
-                price: item.price,
-                product: item.product
-            }));
-            totalPrice = cartItems.reduce((acc, item) => acc + (item.price * item.qty), 0);
-        } else {
-            orderItems = [{
-                name: selectedProduct.name,
-                qty: selectedQty,
-                image: selectedProduct.image,
-                price: selectedProduct.price,
-                product: selectedProduct._id
-            }];
-            totalPrice = selectedProduct.price * selectedQty;
-        }
-
-        const orderData = {
-            orderItems,
-            shippingAddress,
-            totalPrice,
-            paymentMethod: method // track if online or cod
-        };
-
-        try {
-            const res = await fetch(`${API_BASE}/api/orders`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${user.token}`
-                },
-                body: JSON.stringify(orderData)
-            });
-
-            if (res.ok) {
-                const createdOrder = await res.json();
-
-                if (method === 'online' && paymentConfig?.isEnabled) {
-                    const scriptLoaded = await loadRazorpayScript();
-                    if (!scriptLoaded) {
-                        alert('Razorpay SDK failed to load. Are you online?');
-                        return;
-                    }
-
-                    const rpRes = await fetch(`${API_BASE}/api/razorpay/create-order`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ amount: orderData.totalPrice, receipt: createdOrder._id })
-                    });
-
-                    if (!rpRes.ok) throw new Error('Razorpay order creation failed');
-                    const rpOrder = await rpRes.json();
-
-                    const options = {
-                        key: paymentConfig.keyId,
-                        amount: rpOrder.amount,
-                        currency: rpOrder.currency,
-                        name: "K'S JADU",
-                        description: "Order #" + createdOrder._id.slice(-6),
-                        image: "/logo.png",
-                        order_id: rpOrder.id,
-                        handler: async (response) => {
-                            const verifyRes = await fetch(`${API_BASE}/api/razorpay/verify`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ ...response, database_order_id: createdOrder._id })
-                            });
-                            if (verifyRes.ok) {
-                                setOrderStatus('success');
-                                finalizeOrder();
-                            } else {
-                                setOrderStatus('error');
-                            }
-                        },
-                        prefill: { name: user.name, email: user.email, contact: shippingAddress.phone },
-                        theme: { color: "rgb(0, 0, 128)" }
-                    };
-
-                    const rzp = new window.Razorpay(options);
-                    rzp.open();
-                } else {
-                    setOrderStatus('success');
-                    finalizeOrder();
-                }
-            } else {
-                setOrderStatus('error');
-            }
-        } catch (error) {
-            console.error(error);
-            setOrderStatus('error');
-        }
-    };
-
-    const finalizeOrder = async () => {
-        if (isCartCheckout) {
-            await fetch(`${API_BASE}/api/cart`, {
-                method: 'DELETE',
-                headers: { Authorization: `Bearer ${user.token}` }
-            });
-            setCartItems([]);
-            window.dispatchEvent(new Event('cartUpdated'));
-        }
-        setTimeout(() => {
-            setShowCheckout(false);
-            setOrderStatus(null);
-            setShippingAddress({ address: '', city: '', postalCode: '', phone: '' });
-            window.location.reload();
-        }, 3000);
-    };
-
-    const handleOpenReview = (item) => {
-        setReviewModal({ open: true, product: item });
-        setReviewForm({ rating: 5, comment: '', title: '', images: null });
+    const handleBuyAgain = async (item) => {
+        const ok = await addToCart(item.product, { qty: item.qty, size: item.size });
+        if (ok) toast('Added to your cart');
     };
 
     const handleSubmitReview = async (e) => {
         e.preventDefault();
-
-        // Debug: log the full item object to see what fields are available
-        console.log('🔍 Review modal product item:', reviewModal.product);
-        console.log('🔍 Product ID being used:', reviewModal.product?.product);
-        console.log('🔍 Full product keys:', Object.keys(reviewModal.product || {}));
-
-        const productId = reviewModal.product?.product || reviewModal.product?._id;
+        const productId = reviewModal.item?.product;
         if (!productId) {
-            alert('Error: Cannot determine product ID. Check console for details.');
+            toast('Could not identify the product for this review.', 'error');
             return;
         }
 
+        setSubmittingReview(true);
         const formData = new FormData();
         formData.append('rating', reviewForm.rating);
         formData.append('comment', reviewForm.comment);
         formData.append('title', reviewForm.title);
-        if (reviewForm.images) {
-            for (let i = 0; i < reviewForm.images.length; i++) {
-                formData.append('images', reviewForm.images[i]);
-            }
-        }
+        for (const file of reviewForm.images || []) formData.append('images', file);
 
         try {
-            console.log('📤 Submitting review to:', `${API_BASE}/api/products/${productId}/reviews`);
-            const res = await fetch(`${API_BASE}/api/products/${productId}/reviews`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${user.token}` },
-                body: formData
-            });
-            const data = await res.json();
-            console.log('📥 Review response:', res.status, data);
-            if (res.ok) {
-                alert('Review submitted successfully!');
-                setReviewModal({ open: false, product: null });
-            } else {
-                alert(data.message || 'Error submitting review');
-            }
-        } catch (error) {
-            console.error('❌ Review submission error:', error);
-            alert(`Review Error: ${error.message || error.toString()}`);
+            await api.upload(`/api/products/${productId}/reviews`, formData);
+            invalidateCache('/api/products');
+            toast('Thanks for your review!');
+            setReviewModal({ open: false, item: null });
+        } catch (err) {
+            toast(err.message, 'error');
+        } finally {
+            setSubmittingReview(false);
         }
     };
 
+    if (!user) return null;
+
     return (
-        <div style={{ padding: '2rem', maxWidth: '1000px', margin: '80px auto', minHeight: '80vh' }}>
-            {/* Cart Section */}
-            {cartItems.length > 0 && (
-                <div style={{ backgroundColor: '#fff', padding: '2rem', borderRadius: '20px', boxShadow: '0 10px 30px rgba(0,0,0,0.05)', marginBottom: '3rem', border: '2px solid rgb(0, 0, 128)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                        <h2 style={{ color: 'rgb(0, 0, 128)', margin: 0 }}>🛒 My Cart ({cartItems.length} items)</h2>
-                        <button
-                            onClick={handleBuyNowCart}
-                            style={{ padding: '12px 25px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 15px rgba(27,54,93,0.3)' }}
-                        >
-                            BUY ALL NOW (COD)
-                        </button>
-                    </div>
-
-                    <div style={{ display: 'grid', gap: '1rem' }}>
-                        {cartItems.map((item) => (
-                            <div key={item._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderBottom: '1px solid #eee' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                    <div style={{ width: '60px', height: '60px', backgroundColor: '#f9f9f9', borderRadius: '8px', padding: '5px' }}>
-                                        <img src={item.image && item.image.startsWith('http') ? item.image : `${API_BASE}${item.image}`} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                                    </div>
-                                    <div>
-                                        <h4 style={{ margin: '0 0 5px 0' }}>{item.name}</h4>
-                                        <p style={{ margin: 0, color: '#666', fontSize: '0.9rem' }}>₹{item.price} x {item.qty}</p>
-                                    </div>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                    <span style={{ fontWeight: 'bold' }}>₹{item.price * item.qty}</span>
-                                    <button
-                                        onClick={() => removeFromCart(item.product)}
-                                        style={{ backgroundColor: 'transparent', border: 'none', color: '#ff4444', cursor: 'pointer', fontSize: '1.2rem' }}
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    <div style={{ marginTop: '1.5rem', textAlign: 'right', fontSize: '1.4rem', fontWeight: 'bold', color: 'rgb(0, 0, 128)' }}>
-                        Total: ₹{cartItems.reduce((acc, item) => acc + (item.price * item.qty), 0)}
-                    </div>
-                </div>
-            )}
-
-            <h1 style={{ color: 'rgb(0, 0, 128)', marginBottom: '2rem' }}>Order History</h1>
+        <div className="container" style={{ padding: '2.5rem 1rem 4rem', maxWidth: 1000 }}>
+            <header style={{ marginBottom: '2rem' }}>
+                <h1 style={{ fontSize: 'clamp(1.6rem, 4vw, 2.2rem)', fontWeight: 800 }}>Your orders</h1>
+                <p style={{ color: 'var(--color-text-muted)' }}>Track deliveries and reorder your favourites.</p>
+            </header>
 
             {loading ? (
-                <div>Loading your orders...</div>
+                <div style={{ display: 'grid', gap: '1.5rem' }}>
+                    {[0, 1].map((i) => <Skeleton key={i} height={190} radius={20} />)}
+                </div>
+            ) : error ? (
+                <div className="state-panel">
+                    <div className="state-panel__icon">📡</div>
+                    <p className="state-panel__title">We couldn't load your orders</p>
+                    <p className="state-panel__text">{error}</p>
+                    <button type="button" className="btn btn-primary" onClick={loadOrders}>Try again</button>
+                </div>
             ) : orders.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '3rem', backgroundColor: 'white', borderRadius: '15px' }}>
-                    <h3>No orders found.</h3>
-                    <p>Go to shop to place your first order!</p>
-                    <button onClick={() => navigate('/shop')} style={{ marginTop: '1rem', padding: '10px 20px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Shop Now</button>
+                <div className="state-panel">
+                    <div className="state-panel__icon">📦</div>
+                    <p className="state-panel__title">No orders yet</p>
+                    <p className="state-panel__text">When you place your first order it will show up here.</p>
+                    <Link to="/shop" className="btn btn-primary">Start shopping</Link>
                 </div>
             ) : (
                 <div style={{ display: 'grid', gap: '1.5rem' }}>
-                    {orders.map(order => (
-                        <div key={order._id} style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)', borderLeft: `5px solid ${order.status === 'Accepted' ? '#28a745' : order.status === 'Rejected' ? '#dc3545' : '#ffc107'}` }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', borderBottom: '1px solid #eee', paddingBottom: '1rem' }}>
-                                <div>
-                                    <span style={{ color: '#666', fontSize: '0.9rem' }}>Order ID:</span>
-                                    <span style={{ fontWeight: 'bold', marginLeft: '5px' }}>#{order._id.slice(-8)}</span>
-                                </div>
-                                <div style={{
-                                    padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: 'bold',
-                                    backgroundColor: order.status === 'Delivered' ? '#e2e3e5' : order.status === 'Accepted' ? '#d4edda' : order.status === 'Rejected' ? '#f8d7da' : '#fff3cd',
-                                    color: order.status === 'Delivered' ? '#383d41' : order.status === 'Accepted' ? '#155724' : order.status === 'Rejected' ? '#721c24' : '#856404'
-                                }}>
-                                    {order.status}
-                                </div>
-                            </div>
+                    {orders.map((order) => {
+                        const stepIndex = STATUS_STEPS.indexOf(order.status);
+                        const isClosed = ['Rejected', 'Cancelled'].includes(order.status);
+                        const canCancel = ['Pending', 'Accepted'].includes(order.status);
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-                                <div>
-                                    <h4 style={{ marginBottom: '0.5rem' }}>Items:</h4>
-                                    {order.orderItems.map((item, idx) => (
-                                        <div key={idx} style={{ fontSize: '0.95rem', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-                                            <span style={{ flex: 1 }}>{item.name} x {item.qty} - ₹{item.price}</span>
-                                            <div style={{ display: 'flex', gap: '5px' }}>
-                                                {order.status === 'Delivered' && (
-                                                    <button
-                                                        onClick={() => handleOpenReview(item)}
-                                                        style={{ padding: '4px 10px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
-                                                    >
-                                                        Review Product
-                                                    </button>
-                                                )}
-                                                <button
-                                                    onClick={() => handleBuyNowItem(item)}
-                                                    style={{ padding: '4px 10px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
-                                                >
-                                                    Buy Again
-                                                </button>
-                                            </div>
+                        return (
+                            <article key={order._id} className="card" style={{ padding: '1.5rem' }}>
+                                <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: '1.2rem', paddingBottom: '1.2rem', borderBottom: '1px solid var(--color-border)' }}>
+                                    <div>
+                                        <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>{order.orderNumber}</div>
+                                        <div style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
+                                            Placed {new Date(order.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                                         </div>
-                                    ))}
-                                    <div style={{ marginTop: '1rem', fontWeight: 'bold', fontSize: '1.1rem' }}>
-                                        Total: ₹{order.totalPrice} (COD)
                                     </div>
-                                </div>
-
-                                <div style={{ padding: '1rem', backgroundColor: '#f9f9f9', borderRadius: '10px' }}>
-                                    <h4 style={{ marginBottom: '0.5rem' }}>Tracking Details:</h4>
-                                    {(order.status === 'Accepted' || order.status === 'Delivered') && order.tracking ? (
-                                        <>
-                                            <div style={{ marginBottom: '5px' }}>📅 <strong>Shipped:</strong> {order.tracking.shippingDate || 'TBA'}</div>
-                                            <div style={{ marginBottom: '5px' }}>🚚 <strong>Est. Delivery:</strong> {order.tracking.deliveryDate || 'TBA'}</div>
-                                            <div style={{ marginBottom: '5px' }}>🕙 <strong>Time:</strong> {order.tracking.deliveryTime || 'TBA'}</div>
-                                            <div style={{ fontSize: '0.9rem', fontStyle: 'italic', color: '#555' }}>
-                                                {order.status === 'Delivered' ? 'Delivered successfully ✅' : (order.tracking.details || 'Your order is on the way!')}
-                                            </div>
-                                        </>
-                                    ) : order.status === 'Rejected' ? (
-                                        <div style={{ color: '#dc3545' }}>Your order has been declined by the store.</div>
-                                    ) : (
-                                        <div style={{ color: '#888', fontStyle: 'italic' }}>Waiting for admin confirmation...</div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {showCheckout && (
-                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}>
-                    <div style={{ backgroundColor: 'white', padding: '2rem', borderRadius: '15px', width: '90%', maxWidth: '400px', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-                        {orderStatus === 'success' ? (
-                            <div style={{ textAlign: 'center', padding: '1rem' }}>
-                                <h1 style={{ fontSize: '4rem' }}>🎉</h1>
-                                <h2 style={{ color: '#28a745' }}>Order Placed!</h2>
-                                <p>Your COD order has been received successfully.</p>
-                            </div>
-                        ) : (
-                            <>
-                                <h2 style={{ marginBottom: '1rem', color: 'rgb(0, 0, 128)' }}>Checkout Summary</h2>
-
-                                {isCartCheckout ? (
-                                    <div style={{ marginBottom: '1rem', maxHeight: '150px', overflowY: 'auto', borderBottom: '1px solid #eee', paddingBottom: '1rem' }}>
-                                        {cartItems.map(item => (
-                                            <div key={item._id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: '5px' }}>
-                                                <span>{item.name} x {item.qty}</span>
-                                                <span>₹{item.price * item.qty}</span>
-                                            </div>
-                                        ))}
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <span className={`badge ${STATUS_STYLE[order.status] || 'badge--neutral'}`}>{order.status}</span>
+                                        <span className="badge badge--neutral">
+                                            {order.paymentMethod === 'cod' ? 'Cash on delivery' : order.isPaid ? 'Paid online' : 'Payment pending'}
+                                        </span>
                                     </div>
-                                ) : (
-                                    <>
-                                        <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
-                                            <span>Product:</span>
-                                            <span>{selectedProduct?.name}</span>
-                                        </div>
-                                        <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
-                                            <span>Quantity:</span>
-                                            <span>{selectedQty}</span>
-                                        </div>
-                                    </>
+                                </header>
+
+                                {/* Progress rail makes "where is my order" answerable at a glance. */}
+                                {!isClosed && (
+                                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1.4rem' }}>
+                                        {STATUS_STEPS.map((step, i) => {
+                                            const done = i <= stepIndex;
+                                            return (
+                                                <React.Fragment key={step}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                                        <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '0.7rem', fontWeight: 800, background: done ? 'var(--color-accent)' : 'var(--color-surface-sunken)', color: done ? '#fff' : 'var(--color-text-faint)' }}>
+                                                            {done ? '✓' : i + 1}
+                                                        </span>
+                                                        <span style={{ fontSize: '0.72rem', color: done ? 'var(--color-text)' : 'var(--color-text-faint)', fontWeight: done ? 600 : 400 }}>{step}</span>
+                                                    </div>
+                                                    {i < STATUS_STEPS.length - 1 && (
+                                                        <div style={{ flex: 1, height: 2, background: i < stepIndex ? 'var(--color-accent)' : 'var(--color-border)', marginBottom: 18 }} />
+                                                    )}
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                    </div>
                                 )}
 
-                                <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.1rem', color: 'rgb(0, 0, 128)' }}>
-                                    <span>Total Amount:</span>
-                                    <span>₹{isCartCheckout
-                                        ? cartItems.reduce((acc, item) => acc + (item.price * item.qty), 0)
-                                        : selectedProduct?.price * selectedQty}</span>
-                                </div>
-
-                                <form onSubmit={(e) => handlePlaceOrder(e, 'cod')} style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                                    <input type="text" placeholder="Street Address" required value={shippingAddress.address} onChange={(e) => setShippingAddress({ ...shippingAddress, address: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
-                                    <input type="text" placeholder="City" required value={shippingAddress.city} onChange={(e) => setShippingAddress({ ...shippingAddress, city: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
-                                    <input type="text" placeholder="PIN Code" required value={shippingAddress.postalCode} onChange={(e) => setShippingAddress({ ...shippingAddress, postalCode: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
-                                    <input type="text" placeholder="Phone Number" required value={shippingAddress.phone} onChange={(e) => setShippingAddress({ ...shippingAddress, phone: e.target.value })} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #ddd' }} />
-
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '1rem' }}>
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <button type="submit" style={{ flex: 1, padding: '14px', backgroundColor: 'rgb(0, 0, 128)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Confirm COD Order</button>
-                                            {paymentConfig?.isEnabled && (
-                                                <button type="button" onClick={(e) => handlePlaceOrder(null, 'online')} style={{ flex: 1, padding: '14px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Pay Online</button>
-                                            )}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
+                                    <div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                            {order.orderItems.map((item, idx) => (
+                                                <div key={idx} style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                                    <img
+                                                        src={imageUrl(item.image)}
+                                                        alt=""
+                                                        loading="lazy"
+                                                        decoding="async"
+                                                        style={{ width: 52, height: 52, borderRadius: 'var(--radius-sm)', objectFit: 'cover', background: 'var(--color-surface-alt)', flexShrink: 0 }}
+                                                    />
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{ fontSize: '0.92rem', fontWeight: 600 }}>{item.name}</div>
+                                                        <div style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
+                                                            {item.size ? `${item.size} · ` : ''}{formatPrice(item.price)} × {item.qty}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                                        {order.status === 'Delivered' && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-ghost"
+                                                                style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+                                                                onClick={() => {
+                                                                    setReviewModal({ open: true, item });
+                                                                    setReviewForm({ rating: 5, title: '', comment: '', images: null });
+                                                                }}
+                                                            >
+                                                                Review
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-outline"
+                                                            style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+                                                            onClick={() => handleBuyAgain(item)}
+                                                        >
+                                                            Buy again
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
                                         </div>
-                                        <button type="button" onClick={() => setShowCheckout(false)} style={{ width: '100%', padding: '12px', backgroundColor: '#f0f0f0', color: '#333', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancel</button>
+
+                                        <div style={{ marginTop: '1.2rem', paddingTop: '0.9rem', borderTop: '1px dashed var(--color-border)', fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--color-text-muted)' }}>
+                                                <span>Items</span><span>{formatPrice(order.itemsPrice ?? order.totalPrice)}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--color-text-muted)' }}>
+                                                <span>Delivery</span>
+                                                <span>{order.shippingPrice ? formatPrice(order.shippingPrice) : 'FREE'}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: '1.05rem', marginTop: 4 }}>
+                                                <span>Total</span><span>{formatPrice(order.totalPrice)}</span>
+                                            </div>
+                                        </div>
+
+                                        {canCancel && (
+                                            <button
+                                                type="button"
+                                                className="btn btn-outline"
+                                                style={{ marginTop: '1rem', color: 'var(--color-danger)', borderColor: 'var(--color-danger)', padding: '8px 16px', fontSize: '0.85rem' }}
+                                                disabled={busyOrderId === order._id}
+                                                onClick={() => handleCancel(order)}
+                                            >
+                                                {busyOrderId === order._id ? 'Cancelling…' : 'Cancel order'}
+                                            </button>
+                                        )}
                                     </div>
-                                </form>
-                            </>
-                        )}
-                    </div>
+
+                                    <div style={{ padding: '1.1rem', backgroundColor: 'var(--color-surface-alt)', borderRadius: 'var(--radius-md)', fontSize: '0.9rem' }}>
+                                        <h3 style={{ marginBottom: '0.7rem', fontSize: '0.95rem', fontWeight: 700 }}>Delivery</h3>
+
+                                        <address style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', lineHeight: 1.5, marginBottom: '0.9rem' }}>
+                                            {order.shippingAddress?.fullName && <div>{order.shippingAddress.fullName}</div>}
+                                            <div>{order.shippingAddress?.address}</div>
+                                            <div>{order.shippingAddress?.city} — {order.shippingAddress?.postalCode}</div>
+                                            <div>📞 {order.shippingAddress?.phone}</div>
+                                        </address>
+
+                                        {isClosed ? (
+                                            <div style={{ color: 'var(--color-danger)' }}>
+                                                This order was {order.status.toLowerCase()}.
+                                            </div>
+                                        ) : order.tracking?.shippingDate || order.tracking?.deliveryDate ? (
+                                            <div style={{ color: 'var(--color-text-muted)', lineHeight: 1.7 }}>
+                                                {order.tracking.shippingDate && <div>📅 Shipped: {order.tracking.shippingDate}</div>}
+                                                {order.tracking.deliveryDate && <div>🚚 Expected: {order.tracking.deliveryDate}</div>}
+                                                {order.tracking.deliveryTime && <div>🕙 {order.tracking.deliveryTime}</div>}
+                                                {order.tracking.details && <div style={{ fontStyle: 'italic', marginTop: 6 }}>{order.tracking.details}</div>}
+                                            </div>
+                                        ) : (
+                                            <div style={{ color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+                                                Tracking details will appear once your order is dispatched.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </article>
+                        );
+                    })}
                 </div>
             )}
 
-            {/* Review Modal */}
             {reviewModal.open && (
-                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 3000, backdropFilter: 'blur(10px)' }}>
-                    <div style={{ backgroundColor: '#fff', padding: '2.5rem', borderRadius: '32px', width: '90%', maxWidth: '500px', boxShadow: '0 20px 50px rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                            <h2 style={{ fontSize: '1.8rem', fontWeight: '800', color: '#111827', margin: '0 0 10px 0' }}>Share Your Experience</h2>
-                            <p style={{ color: '#6b7280', margin: 0 }}>Reviewing {reviewModal.product.name}</p>
-                        </div>
-                        
-                        <form onSubmit={handleSubmitReview} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && setReviewModal({ open: false, item: null })}>
+                    <div className="modal" role="dialog" aria-modal="true" aria-labelledby="review-heading">
+                        <button type="button" className="modal__close" onClick={() => setReviewModal({ open: false, item: null })} aria-label="Close">✕</button>
+
+                        <header style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+                            <h2 id="review-heading" style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: 6 }}>Share your experience</h2>
+                            <p style={{ color: 'var(--color-text-muted)' }}>Reviewing {reviewModal.item?.name}</p>
+                        </header>
+
+                        <form onSubmit={handleSubmitReview} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }} role="radiogroup" aria-label="Rating">
                                 {[1, 2, 3, 4, 5].map((star) => (
                                     <button
                                         key={star}
                                         type="button"
-                                        onClick={() => setReviewForm({ ...reviewForm, rating: star })}
-                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '2.5rem', color: star <= reviewForm.rating ? '#fbbf24' : '#e5e7eb' }}
+                                        role="radio"
+                                        aria-checked={star === reviewForm.rating}
+                                        aria-label={`${star} star${star === 1 ? '' : 's'}`}
+                                        onClick={() => setReviewForm((f) => ({ ...f, rating: star }))}
+                                        style={{ fontSize: '2.2rem', color: star <= reviewForm.rating ? 'var(--color-star)' : 'var(--color-border-strong)', lineHeight: 1 }}
                                     >
                                         ★
                                     </button>
                                 ))}
                             </div>
 
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Review Title</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="e.g. Best Cleaner Ever!" 
-                                    required 
-                                    value={reviewForm.title} 
-                                    onChange={e => setReviewForm({ ...reviewForm, title: e.target.value })} 
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e5e7eb', outline: 'none', fontSize: '1rem' }} 
+                            <div className="field">
+                                <label className="field__label" htmlFor="rv-title">Review title</label>
+                                <input
+                                    id="rv-title" className="input" required maxLength={80}
+                                    placeholder="e.g. Best cleaner I've used"
+                                    value={reviewForm.title}
+                                    onChange={(e) => setReviewForm((f) => ({ ...f, title: e.target.value }))}
                                 />
                             </div>
 
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Your Thoughts</label>
-                                <textarea 
-                                    required 
-                                    rows="4" 
-                                    value={reviewForm.comment} 
-                                    onChange={e => setReviewForm({ ...reviewForm, comment: e.target.value })} 
-                                    placeholder="Tell us about the quality, smell, and effectiveness..." 
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e5e7eb', outline: 'none', fontSize: '1rem', resize: 'none' }} 
+                            <div className="field">
+                                <label className="field__label" htmlFor="rv-comment">Your thoughts</label>
+                                <textarea
+                                    id="rv-comment" className="input" required rows={4} maxLength={800}
+                                    placeholder="Tell us about the quality, scent and how well it worked…"
+                                    value={reviewForm.comment}
+                                    onChange={(e) => setReviewForm((f) => ({ ...f, comment: e.target.value }))}
+                                    style={{ resize: 'vertical' }}
                                 />
                             </div>
 
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '700', fontSize: '0.9rem', color: '#374151' }}>Add Photos</label>
-                                <input 
-                                    type="file" 
-                                    multiple 
-                                    accept="image/*" 
-                                    onChange={e => setReviewForm({ ...reviewForm, images: e.target.files })} 
-                                    style={{ width: '100%', color: '#6b7280', fontSize: '0.9rem' }}
+                            <div className="field">
+                                <label className="field__label" htmlFor="rv-photos">Add photos (optional)</label>
+                                <input
+                                    id="rv-photos" type="file" multiple accept="image/*"
+                                    onChange={(e) => setReviewForm((f) => ({ ...f, images: e.target.files }))}
+                                    style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)' }}
                                 />
                             </div>
 
-                            <div style={{ display: 'flex', gap: '12px', marginTop: '1rem' }}>
-                                <button type="submit" style={{ flex: 2, padding: '14px', backgroundColor: '#111827', color: 'white', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>Submit Review</button>
-                                <button type="button" onClick={() => setReviewModal({ open: false, product: null })} style={{ flex: 1, padding: '14px', backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold' }}>Cancel</button>
+                            <div style={{ display: 'flex', gap: 12 }}>
+                                <button type="submit" className="btn btn-primary" style={{ flex: 2 }} disabled={submittingReview}>
+                                    {submittingReview ? 'Submitting…' : 'Submit review'}
+                                </button>
+                                <button type="button" className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setReviewModal({ open: false, item: null })}>
+                                    Cancel
+                                </button>
                             </div>
                         </form>
                     </div>

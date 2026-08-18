@@ -1,358 +1,373 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import API_BASE from '../config';
-
+import React, { useState, useEffect, useRef } from 'react';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { api, imageUrl } from '../api/client';
+import { useApp } from '../context/AppContext';
 import ProfileSidebar from './ProfileSidebar';
 
+const NAV_LINKS = [
+    { to: '/shop', label: 'Shop' },
+    { to: '/our-story', label: 'Our Story' },
+    { to: '/ingredients', label: 'Ingredients' },
+    { to: '/blog', label: 'Blog' },
+    { to: '/wholesale', label: 'Wholesale' },
+];
+
 const Navbar = () => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [isSearchOpen, setIsSearchOpen] = useState(false);
-    const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
-    const [isProfileOpen, setIsProfileOpen] = useState(false);
-    const [cartCount, setCartCount] = useState(0);
-    const [categories, setCategories] = useState([]);
+    const navigate = useNavigate();
+    const { user, logout, cartSummary, openCart, theme, toggleTheme } = useApp();
+
+    const [isMenuOpen, setMenuOpen] = useState(false);
+    const [isSearchOpen, setSearchOpen] = useState(false);
+    const [isProfileOpen, setProfileOpen] = useState(false);
     const [showCategories, setShowCategories] = useState(false);
-    const navigate = React.useMemo(() => {
-        // We'll use useNavigate inside the component logic
-        return null; 
-    }, []); 
-    // Wait, I should import useNavigate correctly. It's already available via props or hook.
-    // Let's use the hook inside the component.
+    const [categories, setCategories] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
 
+    const searchInputRef = useRef(null);
+    const categoryRef = useRef(null);
 
-    const fetchCartCount = React.useCallback(async () => {
-        if (!user) {
-            setCartCount(0);
-            return;
-        }
-        try {
-            const response = await fetch(`${API_BASE}/api/cart`, {
-                headers: { Authorization: `Bearer ${user.token}` }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setCartCount(data.length);
-            }
-        } catch (error) {
-            console.error('Error fetching cart count:', error);
-        }
-    }, [user]);
+    useEffect(() => {
+        api.get('/api/categories', { auth: false })
+            .then((data) => setCategories(Array.isArray(data) ? data : []))
+            .catch(() => setCategories([]));
+    }, []);
 
-    // Update user state if localStorage changes (e.g. after login)
-    React.useEffect(() => {
-        const fetchCategories = async () => {
-            try {
-                const res = await fetch(`${API_BASE}/api/categories`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setCategories(data);
-                }
-            } catch (error) {
-                console.error('Error fetching categories:', error);
-            }
+    // Focus the field as soon as the search panel opens.
+    useEffect(() => {
+        if (isSearchOpen) searchInputRef.current?.focus();
+    }, [isSearchOpen]);
+
+    // Close the categories dropdown on outside click / Escape, so it isn't
+    // stranded open on touch devices where there is no mouseleave.
+    useEffect(() => {
+        if (!showCategories) return;
+        const onPointerDown = (e) => {
+            if (categoryRef.current && !categoryRef.current.contains(e.target)) setShowCategories(false);
         };
-        fetchCategories();
-
-        const handleStorageChange = () => {
-            setUser(JSON.parse(localStorage.getItem('user')));
-        };
-
-        window.addEventListener('storage', handleStorageChange);
-        window.addEventListener('cartUpdated', fetchCartCount);
-
-        fetchCartCount();
-
+        const onKeyDown = (e) => e.key === 'Escape' && setShowCategories(false);
+        document.addEventListener('pointerdown', onPointerDown);
+        document.addEventListener('keydown', onKeyDown);
         return () => {
-            window.removeEventListener('storage', handleStorageChange);
-            window.removeEventListener('cartUpdated', fetchCartCount);
+            document.removeEventListener('pointerdown', onPointerDown);
+            document.removeEventListener('keydown', onKeyDown);
         };
-    }, [fetchCartCount]);
+    }, [showCategories]);
+
+    const closeMenu = () => setMenuOpen(false);
 
     const handleLogout = () => {
-        localStorage.removeItem('user');
-        setUser(null);
-        setCartCount(0);
-        setIsProfileOpen(false);
-        window.location.href = '/login';
+        logout();
+        setProfileOpen(false);
+        navigate('/');
     };
 
-    const handleUserIconClick = (e) => {
-        if (user) {
-            e.preventDefault(); // Prevent navigation if logged in
-            setIsProfileOpen(true);
-        }
-        // else let Link take us to /login
+    const handleSearch = (e) => {
+        e.preventDefault();
+        const term = searchTerm.trim();
+        if (!term) return;
+        navigate(`/shop?keyword=${encodeURIComponent(term)}`);
+        setSearchOpen(false);
+        setSearchTerm('');
+        closeMenu();
     };
 
-    const toggleTheme = () => {
-        window.dispatchEvent(new Event('toggleTheme'));
+    const goToCategory = (name) => {
+        navigate(`/shop?category=${encodeURIComponent(name)}`);
+        setShowCategories(false);
+        closeMenu();
+    };
+
+    const handleCartClick = () => {
+        // This used to call a `navigate` that was initialised to null, which
+        // threw a TypeError and killed the whole header for signed-out users.
+        if (user) openCart();
+        else navigate('/login?redirect=cart');
+    };
+
+    const iconProps = {
+        xmlns: 'http://www.w3.org/2000/svg',
+        width: 20,
+        height: 20,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
     };
 
     return (
         <>
-            <nav style={{
-                borderBottom: '1px solid rgba(0,0,0,0.05)',
-                position: 'sticky',
-                top: 0,
-                backgroundColor: 'var(--color-white)',
-                transition: 'var(--bg-transition)',
-                zIndex: 1000
-            }}>
-                <div className="container" style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    height: '80px'
-                }}>
-                    <Link to="/" className="logo" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}>
-                        <img src="/logo.png" alt="K'S JADU Utils" className="nav-logo-img" style={{ height: '50px', transition: 'transform 0.5s ease' }} />
-                        <span className="brand-name" style={{ fontSize: '1.8rem', fontWeight: '800', letterSpacing: '1px' }}>K'S JADU</span>
+            <nav
+                style={{
+                    borderBottom: '1px solid var(--color-border)',
+                    position: 'sticky',
+                    top: 0,
+                    backgroundColor: 'var(--color-surface)',
+                    transition: 'var(--bg-transition)',
+                    zIndex: 1000,
+                }}
+            >
+                <div
+                    className="container"
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        height: 'var(--header-height)',
+                        gap: '1rem',
+                    }}
+                >
+                    <Link to="/" className="logo" onClick={closeMenu} style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                        <img src="/logo.png" alt="" className="nav-logo-img" width="48" height="48" style={{ height: 48, width: 'auto' }} />
+                        <span className="brand-name" style={{ fontSize: '1.6rem' }}>K'S JADU</span>
                     </Link>
 
-                    <div className={`nav-links ${isOpen ? 'open' : ''}`} style={{ display: 'flex', gap: '2rem', transition: 'all 0.3s ease', alignItems: 'center' }}>
-                        {/* Categories Dropdown */}
-                        <div 
+                    {/* Layout lives in CSS, not an inline style: an inline
+                        display:flex outranks the media query and would leave the
+                        full desktop nav on screen next to the hamburger. */}
+                    <div className={`nav-links ${isMenuOpen ? 'open' : ''}`}>
+                        <div
+                            ref={categoryRef}
                             onMouseEnter={() => setShowCategories(true)}
                             onMouseLeave={() => setShowCategories(false)}
                             style={{ position: 'relative' }}
                         >
-                            <div style={{ 
-                                fontWeight: '500', 
-                                color: 'var(--color-text-main)', 
-                                fontSize: '0.95rem',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                padding: '10px 0'
-                            }}>
-                                Categories <span style={{ fontSize: '0.7rem' }}>{showCategories ? '▲' : '▼'}</span>
-                            </div>
-                            
+                            <button
+                                type="button"
+                                className="nav-item"
+                                aria-expanded={showCategories}
+                                aria-haspopup="true"
+                                onClick={() => setShowCategories((v) => !v)}
+                                style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}
+                            >
+                                Categories
+                                <span style={{ fontSize: '0.6rem', transform: showCategories ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }}>▼</span>
+                            </button>
+
                             {showCategories && categories.length > 0 && (
-                                <div style={{
-                                    position: 'absolute',
-                                    top: '100%',
-                                    left: 0,
-                                    backgroundColor: 'white',
-                                    boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
-                                    borderRadius: '12px',
-                                    minWidth: '220px',
-                                    padding: '10px 0',
-                                    border: '1px solid #f0f0f0',
-                                    zIndex: 1001
-                                }}>
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: '100%',
+                                        left: 0,
+                                        backgroundColor: 'var(--color-surface)',
+                                        boxShadow: 'var(--shadow-md)',
+                                        borderRadius: 'var(--radius-md)',
+                                        minWidth: 230,
+                                        padding: '8px 0',
+                                        border: '1px solid var(--color-border)',
+                                        zIndex: 1001,
+                                    }}
+                                >
                                     {categories.map((cat) => (
-                                        <div 
+                                        <button
                                             key={cat._id}
-                                            onClick={() => {
-                                                window.location.href = `/shop?category=${encodeURIComponent(cat.name)}`;
-                                                setShowCategories(false);
-                                            }}
+                                            type="button"
+                                            onClick={() => goToCategory(cat.name)}
                                             style={{
-                                                padding: '12px 20px',
+                                                display: 'block',
+                                                width: '100%',
+                                                textAlign: 'left',
+                                                padding: '11px 20px',
                                                 fontSize: '0.9rem',
-                                                color: '#555',
-                                                cursor: 'pointer',
-                                                transition: 'all 0.2s'
+                                                color: 'var(--color-text-muted)',
+                                                transition: 'var(--transition)',
                                             }}
-                                            onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#f8f9fa'; e.currentTarget.style.color = 'var(--color-primary)'; }}
-                                            onMouseOut={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#555'; }}
+                                            onMouseOver={(e) => {
+                                                e.currentTarget.style.backgroundColor = 'var(--color-surface-alt)';
+                                                e.currentTarget.style.color = 'var(--color-primary)';
+                                            }}
+                                            onMouseOut={(e) => {
+                                                e.currentTarget.style.backgroundColor = 'transparent';
+                                                e.currentTarget.style.color = 'var(--color-text-muted)';
+                                            }}
                                         >
                                             {cat.name}
-                                        </div>
+                                        </button>
                                     ))}
                                 </div>
                             )}
                         </div>
-                        <Link to="/shop" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>Shop</Link>
-                        <Link to="/our-story" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>Our Story</Link>
-                        <Link to="/ingredients" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>Ingredients</Link>
-                        <Link to="/blog" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>Blog</Link>
-                        <Link to="/wholesale" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>Wholesale</Link>
-                        {user && <Link to="/my-orders" className="nav-item" style={{ fontWeight: '500', color: 'var(--color-text-main)', fontSize: '0.95rem' }}>My Orders</Link>}
 
-                        {/* Icons moved inside nav-links for mobile responsiveness */}
-                        <div className="icons" style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', marginLeft: '1rem' }}>
-                            <span style={{ cursor: 'pointer' }} onClick={() => setIsSearchOpen(!isSearchOpen)}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                            </span>
+                        {NAV_LINKS.map(({ to, label }) => (
+                            <NavLink
+                                key={to}
+                                to={to}
+                                onClick={closeMenu}
+                                className={({ isActive }) => `nav-item ${isActive ? 'is-active' : ''}`}
+                            >
+                                {label}
+                            </NavLink>
+                        ))}
 
-                            {/* Theme Toggle Button */}
-                            <div 
+                        {user && (
+                            <NavLink to="/my-orders" onClick={closeMenu} className={({ isActive }) => `nav-item ${isActive ? 'is-active' : ''}`}>
+                                My Orders
+                            </NavLink>
+                        )}
+
+                        <div className="icons" style={{ display: 'flex', gap: '1.25rem', alignItems: 'center', marginLeft: '0.5rem' }}>
+                            <button type="button" aria-label="Search products" onClick={() => setSearchOpen((v) => !v)} style={{ display: 'flex' }}>
+                                <svg {...iconProps}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={toggleTheme}
+                                aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
                                 style={{
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    padding: '8px',
+                                    display: 'grid',
+                                    placeItems: 'center',
+                                    padding: 8,
                                     borderRadius: '50%',
-                                    background: 'var(--color-off-white)',
-                                    transition: 'all 0.3s ease'
+                                    background: 'var(--color-surface-alt)',
                                 }}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    {/* Sun Icon */}
-                                    <circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="12" y1="1" x2="12" y2="3" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" stroke="currentColor" strokeWidth="2" />
-                                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" stroke="currentColor" strokeWidth="2" />
-                                </svg>
-                            </div>
+                                {theme === 'light' ? (
+                                    <svg {...iconProps}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
+                                ) : (
+                                    <svg {...iconProps}>
+                                        <circle cx="12" cy="12" r="5" />
+                                        <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
+                                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                                        <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
+                                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                                    </svg>
+                                )}
+                            </button>
 
                             {user ? (
-                                <div
-                                    onClick={handleUserIconClick}
+                                <button
+                                    type="button"
+                                    onClick={() => setProfileOpen(true)}
+                                    aria-label="Open your profile"
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: '8px',
-                                        cursor: 'pointer',
-                                        border: '1px solid var(--color-off-white)',
-                                        padding: '4px 12px 4px 4px',
-                                        borderRadius: '20px',
-                                        transition: 'all 0.3s ease',
-                                        background: 'var(--color-off-white)'
+                                        gap: 8,
+                                        padding: '4px 14px 4px 4px',
+                                        borderRadius: 'var(--radius-pill)',
+                                        background: 'var(--color-surface-alt)',
                                     }}
                                 >
-                                    <div style={{
-                                        width: '32px',
-                                        height: '32px',
-                                        borderRadius: '50%',
-                                        overflow: 'hidden',
-                                        backgroundColor: 'var(--color-white)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        border: '1px solid rgba(0,0,0,0.05)'
-                                    }}>
+                                    <span
+                                        style={{
+                                            width: 32,
+                                            height: 32,
+                                            borderRadius: '50%',
+                                            overflow: 'hidden',
+                                            backgroundColor: 'var(--color-surface)',
+                                            display: 'grid',
+                                            placeItems: 'center',
+                                            border: '1px solid var(--color-border)',
+                                            flexShrink: 0,
+                                        }}
+                                    >
                                         {user.image ? (
+                                            // imageUrl leaves absolute Google avatar URLs alone; the old code
+                                            // prefixed them with the API host and produced a broken image.
                                             <img
-                                                src={`${API_BASE}${user.image}`}
-                                                alt={user.name}
+                                                src={imageUrl(user.image)}
+                                                alt=""
+                                                referrerPolicy="no-referrer"
                                                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                                onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+                                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                             />
-                                        ) : null}
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            style={{ width: '20px', height: '20px', display: user.image ? 'none' : 'block', color: 'var(--color-text-light)' }}
-                                        >
-                                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                                            <circle cx="12" cy="7" r="4"></circle>
-                                        </svg>
-                                    </div>
-                                    <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--color-primary)' }}>
-                                        {user.name.split(' ')[0]}
+                                        ) : (
+                                            <svg {...iconProps} width="18" height="18" style={{ color: 'var(--color-text-muted)' }}>
+                                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                                            </svg>
+                                        )}
                                     </span>
-                                </div>
+                                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-primary)' }}>
+                                        {String(user.name || 'Account').split(' ')[0]}
+                                    </span>
+                                </button>
                             ) : (
-                                <Link
-                                    to="/login"
-                                    style={{ cursor: 'pointer', color: 'inherit', display: 'flex', alignItems: 'center' }}
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                                <Link to="/login" onClick={closeMenu} aria-label="Sign in" style={{ display: 'flex' }}>
+                                    <svg {...iconProps}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                                 </Link>
                             )}
 
-                            <div
-                                onClick={() => {
-                                    if (user) {
-                                        window.dispatchEvent(new Event('openCart'));
-                                    } else {
-                                        navigate('/login');
-                                    }
-                                }}
-                                style={{
-                                    cursor: 'pointer',
-                                    position: 'relative',
-                                    color: 'inherit',
-                                    display: 'flex',
-                                    alignItems: 'center'
-                                }}
+                            <button
+                                type="button"
+                                onClick={handleCartClick}
+                                aria-label={`Open cart, ${cartSummary.itemCount} item${cartSummary.itemCount === 1 ? '' : 's'}`}
+                                style={{ position: 'relative', display: 'flex' }}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
-                                <span style={{
-                                    position: 'absolute',
-                                    top: '-8px',
-                                    right: '-8px',
-                                    backgroundColor: 'var(--color-primary)',
-                                    color: 'white',
-                                    borderRadius: '50%',
-                                    width: '16px',
-                                    height: '16px',
-                                    display: 'flex',
-                                    justifyContent: 'center',
-                                    alignItems: 'center',
-                                    fontSize: '0.65rem'
-                                }}>{cartCount}</span>
-                            </div>
+                                <svg {...iconProps}>
+                                    <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+                                    <line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" />
+                                </svg>
+                                {cartSummary.itemCount > 0 && (
+                                    <span
+                                        style={{
+                                            position: 'absolute',
+                                            top: -7,
+                                            right: -9,
+                                            backgroundColor: 'var(--color-accent)',
+                                            color: '#fff',
+                                            borderRadius: 'var(--radius-pill)',
+                                            minWidth: 18,
+                                            height: 18,
+                                            padding: '0 5px',
+                                            display: 'grid',
+                                            placeItems: 'center',
+                                            fontSize: '0.65rem',
+                                            fontWeight: 700,
+                                        }}
+                                    >
+                                        {cartSummary.itemCount > 99 ? '99+' : cartSummary.itemCount}
+                                    </span>
+                                )}
+                            </button>
                         </div>
                     </div>
 
-                    <div className="mobile-menu-btn" style={{ display: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--color-text-main)' }} onClick={() => setIsOpen(!isOpen)}>
-                        ☰
-                    </div>
+                    <button
+                        type="button"
+                        className="mobile-menu-btn"
+                        aria-label="Toggle navigation menu"
+                        aria-expanded={isMenuOpen}
+                        onClick={() => setMenuOpen((v) => !v)}
+                    >
+                        {isMenuOpen ? '✕' : '☰'}
+                    </button>
                 </div>
-                {/* Search Overlay */}
-                <div style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    width: '100%',
-                    backgroundColor: 'var(--color-white)',
-                    padding: isSearchOpen ? '1rem 0' : '0',
-                    height: isSearchOpen ? 'auto' : '0',
-                    overflow: 'hidden',
-                    transition: 'all 0.3s ease',
-                    boxShadow: isSearchOpen ? '0 10px 15px -3px rgba(0,0,0,0.1)' : 'none',
-                    borderTop: '1px solid rgba(0,0,0,0.05)'
-                }}>
-                    <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <input
-                            type="text"
-                            placeholder="Search for products..."
-                            style={{
-                                width: '100%',
-                                maxWidth: '600px',
-                                padding: '12px 20px',
-                                borderRadius: '30px',
-                                border: '1px solid rgba(0,0,0,0.1)',
-                                outline: 'none',
-                                fontSize: '1rem',
-                                backgroundColor: 'var(--color-off-white)',
-                                color: 'var(--color-text-main)'
-                            }}
-                        />
-                        <span
-                            style={{ cursor: 'pointer', marginLeft: '-40px', color: 'var(--color-text-light)' }}
-                            onClick={() => setIsSearchOpen(false)}
-                        >
-                            ✕
-                        </span>
+
+                {isSearchOpen && (
+                    <div
+                        style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: 0,
+                            width: '100%',
+                            backgroundColor: 'var(--color-surface)',
+                            padding: '1rem 0',
+                            boxShadow: 'var(--shadow-md)',
+                            borderTop: '1px solid var(--color-border)',
+                        }}
+                    >
+                        <form className="container" onSubmit={handleSearch} style={{ display: 'flex', gap: 10, justifyContent: 'center' }} role="search">
+                            <input
+                                ref={searchInputRef}
+                                type="search"
+                                className="input"
+                                placeholder="Search for products..."
+                                aria-label="Search for products"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                style={{ maxWidth: 560, borderRadius: 'var(--radius-pill)' }}
+                            />
+                            <button type="submit" className="btn btn-primary">Search</button>
+                            <button type="button" className="btn btn-ghost" onClick={() => setSearchOpen(false)} aria-label="Close search">✕</button>
+                        </form>
                     </div>
-                </div>
+                )}
             </nav>
 
-            <ProfileSidebar
-                isOpen={isProfileOpen}
-                onClose={() => setIsProfileOpen(false)}
-                user={user}
-                onLogout={handleLogout}
-                onUpdateUser={setUser}
-            />
+            <ProfileSidebar isOpen={isProfileOpen} onClose={() => setProfileOpen(false)} onLogout={handleLogout} />
         </>
     );
 };

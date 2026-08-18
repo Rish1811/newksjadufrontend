@@ -1,189 +1,165 @@
 import React, { useState, useEffect } from 'react';
-import API_BASE from '../config';
+import { Link } from 'react-router-dom';
+import { api, imageUrl } from '../api/client';
+import { useApp } from '../context/AppContext';
 
-const ProfileSidebar = ({ isOpen, onClose, user, onLogout, onUpdateUser }) => {
-    const [image, setImage] = useState(null);
-    const [preview, setPreview] = useState(user?.image ? `${API_BASE}${user.image}` : null);
-    const [loading, setLoading] = useState(false);
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+const ProfileSidebar = ({ isOpen, onClose, onLogout }) => {
+    const { user, login, toast } = useApp();
+
+    const [file, setFile] = useState(null);
+    const [preview, setPreview] = useState(null);
+    const [uploading, setUploading] = useState(false);
+
+    // Revoke the object URL when the preview changes, or the browser leaks it.
+    useEffect(() => {
+        if (!file) return undefined;
+        const url = URL.createObjectURL(file);
+        setPreview(url);
+        return () => URL.revokeObjectURL(url);
+    }, [file]);
 
     useEffect(() => {
-        if (user?.image) {
-            setPreview(`${API_BASE}${user.image}`);
-        }
-    }, [user]);
+        if (!isOpen) return;
+        const onKeyDown = (e) => e.key === 'Escape' && onClose();
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [isOpen, onClose]);
 
-    const handleImageChange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            setImage(file);
-            setPreview(URL.createObjectURL(file));
+    const handleFileChange = (e) => {
+        const selected = e.target.files?.[0];
+        if (!selected) return;
+        if (!selected.type.startsWith('image/')) {
+            toast('Please choose an image file.', 'error');
+            return;
         }
+        if (selected.size > MAX_AVATAR_BYTES) {
+            toast('That image is larger than 5MB.', 'error');
+            return;
+        }
+        setFile(selected);
     };
 
     const handleUpload = async () => {
-        if (!image) return;
-
-        const formData = new FormData();
-        formData.append('image', image);
-
-        setLoading(true);
+        if (!file) return;
+        setUploading(true);
         try {
-            const token = JSON.parse(localStorage.getItem('user')).token;
-            const response = await fetch(`${API_BASE}/api/users/profile/image`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${token}`
-                },
-                body: formData
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                // Update local user state
-                const updatedUser = { ...user, image: data.image };
-                localStorage.setItem('user', JSON.stringify({ ...JSON.parse(localStorage.getItem('user')), ...updatedUser }));
-                onUpdateUser(updatedUser);
-                alert('Profile image updated!');
-            } else {
-                alert(data.message || 'Upload failed');
-            }
-        } catch (error) {
-            console.error(error);
-            alert('Error uploading image');
+            const formData = new FormData();
+            formData.append('image', file);
+            const data = await api.upload('/api/users/profile/image', formData);
+            // Persist through the context so the header avatar updates too.
+            login({ ...user, image: data.image });
+            setFile(null);
+            toast('Profile photo updated');
+        } catch (err) {
+            toast(err.message || 'Upload failed.', 'error');
         } finally {
-            setLoading(false);
+            setUploading(false);
         }
     };
 
+    // user.image is an absolute URL for Google accounts and Vercel Blob alike;
+    // imageUrl only prefixes genuinely relative paths.
+    const avatar = preview || (user?.image ? imageUrl(user.image, null) : null);
+
     return (
-        <div style={{
-            position: 'fixed',
-            top: 0,
-            right: isOpen ? 0 : '-350px',
-            width: '320px',
-            height: '100vh',
-            backgroundColor: 'white',
-            boxShadow: '-4px 0 15px rgba(0,0,0,0.1)',
-            transition: 'right 0.3s ease',
-            zIndex: 1001,
-            padding: '2rem',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center'
-        }}>
-            <button
-                onClick={onClose}
-                style={{
-                    position: 'absolute',
-                    top: '1rem',
-                    left: '1rem',
-                    background: 'none',
-                    border: 'none',
-                    fontSize: '1.5rem',
-                    cursor: 'pointer'
-                }}
+        <>
+            {isOpen && <div className="overlay" onClick={onClose} aria-hidden="true" />}
+
+            <aside
+                className={`drawer ${isOpen ? 'drawer--open' : ''}`}
+                style={{ maxWidth: 340, padding: '2rem 1.5rem', alignItems: 'center' }}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Your profile"
+                aria-hidden={!isOpen}
             >
-                ✕
-            </button>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="Close profile"
+                    style={{ position: 'absolute', top: 16, right: 16, fontSize: '1.2rem', color: 'var(--color-text-muted)' }}
+                >
+                    ✕
+                </button>
 
-            <h2 style={{ color: 'var(--color-primary)', marginBottom: '2rem' }}>My Profile</h2>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '1.75rem', alignSelf: 'flex-start' }}>My profile</h2>
 
-            <div style={{ position: 'relative', marginBottom: '1.5rem' }}>
-                <div style={{
-                    width: '120px',
-                    height: '120px',
-                    borderRadius: '50%',
-                    overflow: 'hidden',
-                    border: '4px solid #f0f0f0',
-                    boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: '#f8fafc'
-                }}>
-                    {preview ? (
-                        <img src={preview} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="#cbd5e1"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            style={{ width: '80px', height: '80px' }}
-                        >
-                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="12" cy="7" r="4"></circle>
-                        </svg>
-                    )}
+                <div style={{ position: 'relative', marginBottom: '1.25rem' }}>
+                    <div
+                        style={{
+                            width: 116, height: 116, borderRadius: '50%', overflow: 'hidden',
+                            border: '3px solid var(--color-border)', display: 'grid', placeItems: 'center',
+                            backgroundColor: 'var(--color-surface-alt)',
+                        }}
+                    >
+                        {avatar ? (
+                            <img
+                                src={avatar}
+                                alt=""
+                                referrerPolicy="no-referrer"
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                            />
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-faint)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 66, height: 66 }}>
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                            </svg>
+                        )}
+                    </div>
+
+                    <label
+                        style={{
+                            position: 'absolute', bottom: 2, right: 2,
+                            backgroundColor: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                            width: 34, height: 34, borderRadius: '50%',
+                            display: 'grid', placeItems: 'center', cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)', fontSize: '0.9rem',
+                        }}
+                    >
+                        📷
+                        <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>Change profile photo</span>
+                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileChange} />
+                    </label>
                 </div>
 
-                <label style={{
-                    position: 'absolute',
-                    bottom: '5px',
-                    right: '5px',
-                    backgroundColor: 'var(--color-primary)',
-                    color: 'white',
-                    width: '35px',
-                    height: '35px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-                }}>
-                    📷
-                    <input type="file" style={{ display: 'none' }} onChange={handleImageChange} accept="image/*" />
-                </label>
-            </div>
+                {file && (
+                    <div style={{ display: 'flex', gap: 8, marginBottom: '1rem' }}>
+                        <button type="button" className="btn btn-primary" onClick={handleUpload} disabled={uploading} style={{ padding: '8px 18px', fontSize: '0.85rem' }}>
+                            {uploading ? 'Uploading…' : 'Save photo'}
+                        </button>
+                        <button type="button" className="btn btn-ghost" onClick={() => setFile(null)} disabled={uploading} style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+                            Cancel
+                        </button>
+                    </div>
+                )}
 
-            {image && (
-                <button
-                    onClick={handleUpload}
-                    disabled={loading}
-                    style={{
-                        marginBottom: '1rem',
-                        padding: '8px 16px',
-                        backgroundColor: 'var(--color-secondary)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '20px',
-                        cursor: 'pointer',
-                        opacity: loading ? 0.7 : 1
-                    }}
-                >
-                    {loading ? 'Uploading...' : 'Save Photo'}
-                </button>
-            )}
+                <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>{user?.name}</h3>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', marginBottom: '2rem', textAlign: 'center', wordBreak: 'break-word' }}>
+                    {user?.email}
+                </p>
 
-            <h3 style={{ fontSize: '1.4rem', color: '#333', marginBottom: '0.5rem' }}>{user?.name}</h3>
-            <p style={{ color: '#666', marginBottom: '3rem' }}>{user?.email}</p>
+                <nav style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Link to="/my-orders" onClick={onClose} className="btn btn-ghost btn-block" style={{ justifyContent: 'flex-start' }}>📦 My orders</Link>
+                    <Link to="/shop" onClick={onClose} className="btn btn-ghost btn-block" style={{ justifyContent: 'flex-start' }}>🛍️ Continue shopping</Link>
+                    {user?.isAdmin && (
+                        <Link to="/admin/dashboard" onClick={onClose} className="btn btn-ghost btn-block" style={{ justifyContent: 'flex-start' }}>⚙️ Admin dashboard</Link>
+                    )}
+                </nav>
 
-            <div style={{ width: '100%', borderTop: '1px solid #eee', paddingTop: '2rem', marginTop: 'auto' }}>
-                <button
-                    onClick={onLogout}
-                    style={{
-                        width: '100%',
-                        padding: '12px',
-                        backgroundColor: '#fee',
-                        color: '#d32f2f',
-                        border: 'none',
-                        borderRadius: '8px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '10px'
-                    }}
-                >
-                    <span>🚪</span> Sign Out
-                </button>
-            </div>
-        </div>
+                <div style={{ width: '100%', borderTop: '1px solid var(--color-border)', paddingTop: '1.25rem', marginTop: 'auto' }}>
+                    <button
+                        type="button"
+                        onClick={onLogout}
+                        className="btn btn-block"
+                        style={{ backgroundColor: 'var(--color-danger-bg)', color: 'var(--color-danger)' }}
+                    >
+                        🚪 Sign out
+                    </button>
+                </div>
+            </aside>
+        </>
     );
 };
 
